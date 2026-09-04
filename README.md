@@ -41,8 +41,4 @@ homepage/
 - **Drizzle** - ORM for Database
 - **Jose** - JWT Management
 
-## Important Notes for Development
-
-- Credentials for pgAdmin: admin@admin.com / admin
-
 ## TOODs
