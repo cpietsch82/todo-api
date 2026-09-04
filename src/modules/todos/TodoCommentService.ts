@@ -19,6 +19,10 @@ export class TodoCommentService extends BaseModule {
     return db.select().from(todoComments).orderBy(desc(todoComments.createdAt));
   }
 
+  public async getAllTodoCommentsForUser(userId: string): Promise<TodoComment[]> {
+    return db.select().from(todoComments).where(eq(todoComments.userId, userId)).orderBy(desc(todoComments.createdAt));
+  }
+
   public async getTodoCommentById(commentId: string): Promise<TodoComment | undefined> {
     const [todoComment] = await db.select().from(todoComments).where(eq(todoComments.commentId, commentId)).limit(1);
     return todoComment;

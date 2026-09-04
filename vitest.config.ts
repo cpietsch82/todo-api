@@ -3,6 +3,7 @@ import path from "path";
 
 export default defineConfig({
   test: {
+    reporters: ['verbose'],
     globals: true,
     environment: "node",
     setupFiles: ["./tests/setup.ts"],

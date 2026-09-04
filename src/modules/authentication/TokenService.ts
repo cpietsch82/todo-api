@@ -3,11 +3,15 @@ import { JWTPayload, jwtVerify, SignJWT } from "jose";
 import crypto from "node:crypto";
 import env from "../../../env";
 import UserService from "../users/UserService";
+import { buildJwtClaims, type Permission } from "../authorization/permissions";
+import AuthorizationService from "../authorization/AuthorizationService";
 
 export interface JwtPayload extends JWTPayload {
   id: string;
   email: string;
   username: string;
+  roles: string[];
+  permissions: Permission[];
 }
 
 export interface TokenPair {
@@ -25,6 +29,7 @@ export interface StoredRefreshToken {
 class TokenService extends BaseModule {
   public static instance: TokenService;
   protected userService: UserService;
+  protected authorizationService: AuthorizationService;
 
   constructor() {
     super("auth.token.service", "Business Logic for Token Management");
@@ -34,6 +39,7 @@ class TokenService extends BaseModule {
     }
 
     this.userService = new UserService();
+    this.authorizationService = new AuthorizationService();
 
     return TokenService.instance;
   }
@@ -104,8 +110,8 @@ class TokenService extends BaseModule {
 
     const user = await this.userService.getUserById(stored.id);
     if (!user) throw new Error("UNKNOWN_USER");
-
-    const tokenPair = await this.generateTokenPair({ id: stored.id, email: user.email, username: user.username });
+    const authorization = await this.authorizationService.getAuthorizationForUser(stored.id);
+    const tokenPair = await this.generateTokenPair(buildJwtClaims(user, authorization));
 
     return { tokenPair, id: stored.id };
   }

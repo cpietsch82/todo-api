@@ -3,26 +3,30 @@ import { BaseModule } from "../core/BaseModule";
 import { UserService } from "../users/UserService";
 import { users } from "../users/schema/user.schema";
 import { db } from "@/db";
-import { authentications } from "./schema/auth.schema";
+import { authentications } from "./schema/authentication.schema";
 import { eq } from "drizzle-orm";
 import TokenService from "./TokenService";
+import { buildJwtClaims } from "../authorization/permissions";
+import AuthorizationService from "../authorization/AuthorizationService";
 
-export class AuthService extends BaseModule {
-  public static instance: AuthService;
+export class AuthenticationService extends BaseModule {
+  public static instance: AuthenticationService;
   userService: UserService;
   tokenService: TokenService;
+  authorizationService: AuthorizationService;
 
   constructor() {
     super("auth.service", "Business logic for User authentication management");
     this.userService = new UserService();
 
-    if (!AuthService.instance) {
-      AuthService.instance = this;
+    if (!AuthenticationService.instance) {
+      AuthenticationService.instance = this;
     }
 
     this.tokenService = new TokenService();
+    this.authorizationService = new AuthorizationService();
 
-    return AuthService.instance;
+    return AuthenticationService.instance;
   }
 
   async register(
@@ -32,7 +36,7 @@ export class AuthService extends BaseModule {
     firstName: string | undefined,
     lastName: string | undefined,
   ) {
-    const result = await db.transaction(async (tx) => {
+    const user = await db.transaction(async (tx) => {
       const [user] = await tx
         .insert(users)
         .values({
@@ -48,23 +52,23 @@ export class AuthService extends BaseModule {
         password: await hashPassword(password),
       });
 
-      const tokenPair = await this.tokenService.generateTokenPair({
-        id: user.userId,
-        email: user.email,
-        username: user.username,
-      });
-
-      return {
-        user: {
-          userId: user.userId,
-          email: user.email,
-          firstName: user.firstName,
-          lastName: user.lastName,
-          createdAt: user.createdAt,
-        },
-        tokenPair,
-      };
+      return user;
     });
+
+    await this.authorizationService.assignRoleToUser(user.userId, "user");
+    const authorization = await this.authorizationService.getAuthorizationForUser(user.userId);
+    const tokenPair = await this.tokenService.generateTokenPair(buildJwtClaims(user, authorization));
+
+    const result = {
+      user: {
+        userId: user.userId,
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        createdAt: user.createdAt,
+      },
+      tokenPair,
+    };
 
     return result;
   }
@@ -83,12 +87,8 @@ export class AuthService extends BaseModule {
 
     const isValidatedPassword = await comparePasswords(password, authentication.password);
     if (!isValidatedPassword) throw Error("Invalid credentials");
-
-    const tokenPair = await this.tokenService.generateTokenPair({
-      id: user.userId,
-      email: user.email,
-      username: user.username,
-    });
+    const authorization = await this.authorizationService.getAuthorizationForUser(user.userId);
+    const tokenPair = await this.tokenService.generateTokenPair(buildJwtClaims(user, authorization));
 
     return tokenPair;
   }
@@ -104,4 +104,4 @@ export class AuthService extends BaseModule {
   }
 }
 
-export default AuthService;
+export default AuthenticationService;

@@ -4,7 +4,7 @@ import { TodoAPI } from "@modules/todos/TodoAPI";
 import { User } from "@/db/schema";
 import type { Express } from "express";
 
-import { createAuthHeader, generateUser } from "@tests/test.helpers";
+import { createAuthHeader, generateTodo, generateUser, NON_EXISTENT_UUID } from "@tests/test.helpers";
 import { getTestApp } from "@tests/integration.setup";
 
 describe("TodoAPI", () => {
@@ -29,6 +29,21 @@ describe("TodoAPI", () => {
       expect(response.status).toBe(200);
       expect(response.body).instanceOf(Array);
       expect(response.body).toEqual([]);
+    });
+
+    it("should only return todos owned by the authenticated user", async () => {
+      const otherUser = await generateUser();
+      await generateTodo(testUser.userId, { title: "My Todo" });
+      await generateTodo(otherUser.userId, { title: "Other Todo" });
+
+      const response = await request(server)
+        .get("/api/todos")
+        .set(await createAuthHeader(testUser));
+
+      expect(response.status).toBe(200);
+      expect(response.body).toHaveLength(1);
+      expect(response.body[0].userId).toBe(testUser.userId);
+      expect(response.body[0].title).toBe("My Todo");
     });
   });
 
@@ -102,14 +117,23 @@ describe("TodoAPI", () => {
     });
 
     it("should return 404 for non-existent todo", async () => {
-      const todoId = "550e8400-e29b-41d4-a716-446655440000";
-
       const response = await request(server)
-        .get(`/api/todos/${todoId}`)
+        .get(`/api/todos/${NON_EXISTENT_UUID}`)
         .set("Content-Type", "application/json")
         .set("Accept", "application/json")
         .set(await createAuthHeader(testUser));
       expect(response.status).toBe(404);
+    });
+
+    it("should return 403 for a todo owned by another user", async () => {
+      const otherUser = await generateUser();
+      const foreignTodo = await generateTodo(otherUser.userId, { title: "Foreign Todo" });
+
+      const response = await request(server)
+        .get(`/api/todos/${foreignTodo.todoId}`)
+        .set(await createAuthHeader(testUser));
+
+      expect(response.status).toBe(403);
     });
   });
 
@@ -203,6 +227,37 @@ describe("TodoAPI", () => {
           message: 'Invalid option: expected one of "in_progress"|"finished"|"declined"|"not_ready"|"blocked_by"'
         }
       ]);
+    });
+
+    it("should return 403 when updating a todo owned by another user", async () => {
+      const otherUser = await generateUser();
+      const foreignTodo = await generateTodo(otherUser.userId, { title: "Foreign Todo" });
+
+      const response = await request(server)
+        .patch(`/api/todos/${foreignTodo.todoId}`)
+        .set("Content-Type", "application/json")
+        .set("Accept", "application/json")
+        .set(await createAuthHeader(testUser))
+        .send({
+          updates: {
+            status: "finished",
+          },
+        });
+
+      expect(response.status).toBe(403);
+    });
+  });
+
+  describe("DELETE /api/todos/:todoId", () => {
+    it("should return 403 when deleting a todo owned by another user", async () => {
+      const otherUser = await generateUser();
+      const foreignTodo = await generateTodo(otherUser.userId, { title: "Foreign Todo" });
+
+      const response = await request(server)
+        .delete(`/api/todos/${foreignTodo.todoId}`)
+        .set(await createAuthHeader(testUser));
+
+      expect(response.status).toBe(403);
     });
   });
 });

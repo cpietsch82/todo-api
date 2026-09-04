@@ -26,7 +26,7 @@ export function createAuthMiddleware(tokenService: TokenService): RequestHandler
         req.authenticated = true;
       }
       next();
-    } catch (error: Error | unknown) {
+    } catch (error: unknown) {
       console.error("Authentication error:", error);
       return res.respondAuthorizationInsufficient();
     }

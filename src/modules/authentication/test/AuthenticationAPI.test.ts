@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import request from "supertest";
 import type { Express } from "express";
-import { AuthAPI } from "../AuthAPI";
+import { AuthenticationAPI } from "../AuthenticationAPI";
 import { getTestApp } from "@tests/integration.setup";
 
 const VALID_REGISTER_PAYLOAD = {
@@ -16,7 +16,7 @@ describe("AuthAPI", () => {
   let server: Express;
 
   beforeAll(async () => {
-    new AuthAPI();
+    new AuthenticationAPI();
     server = getTestApp();
   });
 

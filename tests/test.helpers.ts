@@ -1,20 +1,19 @@
 import { User, users, Todo, todos } from "@/db/schema";
 import { db } from "@/db";
 import TokenService from "@/modules/authentication/TokenService";
-import { NewTodo } from "@/modules/todos/schema/todo.schema";
+import { buildJwtClaims, getPermissionsForRoles, type Permission, type UserRole } from "@/modules/authorization/permissions";
 import { todoComments, TodoComment, NewTodoComment } from "@/modules/todos/schema/todo.comment.schema";
+import { NewTodo } from "@/modules/todos/schema/todo.schema";
 
 /** A valid UUID that is guaranteed not to exist in the test database. */
 export const NON_EXISTENT_UUID = "550e8400-e29b-41d4-a716-446655440000";
 
 export const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-// Counter used to generate unique email addresses / usernames within a test run.
-// PGlite runs per Vitest worker, so the counter resets naturally per file.
-let _userCounter = 0;
+let userCounter = 0;
 
 export async function generateUser(payload?: Partial<User>): Promise<User> {
-  const n = ++_userCounter;
+  const n = ++userCounter;
   const testUser = {
     email: `testuser${n}@test.com`,
     username: `testuser${n}`,
@@ -42,20 +41,32 @@ export async function generateTodoComment(
     .insert(todoComments)
     .values({ todoId, userId, comment: "Test comment", ...payload })
     .returning();
+
   return comment;
 }
 
-export async function createTestToken(user: User): Promise<string> {
-  const tokenService = new TokenService();
-  const { accessToken } = await tokenService.generateTokenPair({
-    id: user.userId,
-    email: user.email,
-    username: user.username,
-  });
-  return accessToken;
+export interface TestTokenOptions {
+  role?: UserRole;
+  roles?: UserRole[];
+  permissions?: Permission[];
 }
 
-export async function createAuthHeader(user: User): Promise<{ Authorization: string }> {
-  const token = await createTestToken(user);
+export async function createTestToken(user: User, options: TestTokenOptions = {}): Promise<string> {
+  const roles = options.roles ?? [options.role ?? "user"];
+  const tokenService = new TokenService();
+
+  return tokenService.generateAccessToken({
+    ...buildJwtClaims(user, {
+      roles,
+      permissions: options.permissions ?? getPermissionsForRoles(roles),
+    }),
+  });
+}
+
+export async function createAuthHeader(
+  user: User,
+  options: TestTokenOptions = {},
+): Promise<{ Authorization: string }> {
+  const token = await createTestToken(user, options);
   return { Authorization: `Bearer ${token}` };
 }

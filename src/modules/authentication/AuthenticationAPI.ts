@@ -1,29 +1,26 @@
 import type { Response } from "express";
 import { APIModule } from "../core/APIModule";
-import { AuthService } from "./AuthService";
+import { AuthenticationService } from "./AuthenticationService";
 import { TypedRequestBody } from "../express/Express";
 import { validateBody } from "@/middleware/validate";
-import { RegisterBody, registerSchema, loginSchema, LoginBody, refreshSchema, RefreshBody } from "./schema/auth.schema";
+import { RegisterBody, registerSchema, loginSchema, LoginBody, refreshSchema, RefreshBody } from "./schema/authentication.schema";
 import TokenService from "./TokenService";
 import { createAuthMiddleware } from "@/middleware/authenticateToken";
+import { requireAuthentication } from "@/middleware/permissions";
 
-export class AuthAPI extends APIModule {
-  public static instance: AuthAPI;
-  protected service: AuthService;
+export class AuthenticationAPI extends APIModule {
+  public static instance: AuthenticationAPI;
+  protected service: AuthenticationService;
   protected tokenService: TokenService;
 
   constructor() {
     super("auth.api", "API Module for user authentication operations", "/auth", true);
 
-    this.service = new AuthService();
-
-    if (!AuthAPI.instance) {
-      AuthAPI.instance = this;
-    }
-
+    this.service = new AuthenticationService();
+    if (!AuthenticationAPI.instance) AuthenticationAPI.instance = this;
     this.tokenService = new TokenService();
 
-    return AuthAPI.instance;
+    return AuthenticationAPI.instance;
   }
 
   protected initializeRoutes(): void {
@@ -34,10 +31,10 @@ export class AuthAPI extends APIModule {
     this.router.post("/register", validateBody(registerSchema), this.register.bind(this));
     this.router.post("/login", validateBody(loginSchema), this.login.bind(this));
     this.router.post("/refresh", validateBody(refreshSchema), this.refresh.bind(this));
-    this.router.post("/logout", validateBody(refreshSchema), authenticate, this.logout.bind(this));
+    this.router.post("/logout", validateBody(refreshSchema), authenticate, requireAuthentication(), this.logout.bind(this));
 
     // -------------------------------------------------------------------------
-    // GET /auth/me  (geschützte Test-Route)
+    // GET /auth/me  (protected Test-Route)
     // -------------------------------------------------------------------------
     // this.router.get("/me", authenticate, this.checkMe.bind(this));
   }
@@ -90,12 +87,10 @@ export class AuthAPI extends APIModule {
    * Logout
    */
   private async logout(req: TypedRequestBody<RefreshBody>, res: Response) {
-    if (!req.authenticated) return res.respondAuthorizationRequired();
-
     const { refreshToken } = req.body;
     if (refreshToken) this.service.revokeRefreshToken(refreshToken);
     res.json({ message: "Logged out successfully" });
   }
 }
 
-export default AuthAPI;
+export default AuthenticationAPI;

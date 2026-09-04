@@ -60,6 +60,23 @@ describe("TodoCommentAPI", () => {
       expect(response.body).toBeInstanceOf(Array);
       expect(response.body).toHaveLength(2);
     });
+
+    it("should only return comments owned by the authenticated user", async () => {
+      const otherUser = await generateUser();
+      const otherTodo = await generateTodo(otherUser.userId, { title: "Foreign Todo" });
+
+      await generateTodoComment(testTodo.todoId, testUser.userId, { comment: "Own comment" });
+      await generateTodoComment(otherTodo.todoId, otherUser.userId, { comment: "Foreign comment" });
+
+      const response = await request(server)
+        .get("/api/todo-comments")
+        .set(await createAuthHeader(testUser));
+
+      expect(response.status).toBe(200);
+      expect(response.body).toHaveLength(1);
+      expect(response.body[0].userId).toBe(testUser.userId);
+      expect(response.body[0].comment).toBe("Own comment");
+    });
   });
 
   // ---------------------------------------------------------------------------
@@ -177,6 +194,20 @@ describe("TodoCommentAPI", () => {
 
       expect(response.status).toBe(400);
     });
+
+    it("should return 403 for a comment owned by another user", async () => {
+      const otherUser = await generateUser();
+      const otherTodo = await generateTodo(otherUser.userId, { title: "Foreign Todo" });
+      const foreignComment = await generateTodoComment(otherTodo.todoId, otherUser.userId, {
+        comment: "Foreign comment",
+      });
+
+      const response = await request(server)
+        .get(`/api/todo-comments/${foreignComment.commentId}`)
+        .set(await createAuthHeader(testUser));
+
+      expect(response.status).toBe(403);
+    });
   });
 
   // ---------------------------------------------------------------------------
@@ -222,6 +253,20 @@ describe("TodoCommentAPI", () => {
 
       expect(response.status).toBe(400);
     });
+
+    it("should return 403 when updating a comment owned by another user", async () => {
+      const otherUser = await generateUser();
+      const otherTodo = await generateTodo(otherUser.userId, { title: "Foreign Todo" });
+      const foreignComment = await generateTodoComment(otherTodo.todoId, otherUser.userId);
+
+      const response = await request(server)
+        .patch(`/api/todo-comments/${foreignComment.commentId}`)
+        .set("Content-Type", "application/json")
+        .set(await createAuthHeader(testUser))
+        .send({ updates: { comment: "Hijacked comment" } });
+
+      expect(response.status).toBe(403);
+    });
   });
 
   // ---------------------------------------------------------------------------
@@ -253,6 +298,18 @@ describe("TodoCommentAPI", () => {
         .set(await createAuthHeader(testUser));
 
       expect(response.status).toBe(400);
+    });
+
+    it("should return 403 when deleting a comment owned by another user", async () => {
+      const otherUser = await generateUser();
+      const otherTodo = await generateTodo(otherUser.userId, { title: "Foreign Todo" });
+      const foreignComment = await generateTodoComment(otherTodo.todoId, otherUser.userId);
+
+      const response = await request(server)
+        .delete(`/api/todo-comments/${foreignComment.commentId}`)
+        .set(await createAuthHeader(testUser));
+
+      expect(response.status).toBe(403);
     });
   });
 });

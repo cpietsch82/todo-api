@@ -82,6 +82,16 @@ describe("UserAPI", () => {
 
       expect(response.status).toBe(400);
     });
+
+    it("should return 403 when requesting another user", async () => {
+      const otherUser = await generateUser({ email: "other@test.com", username: "otheruser" });
+
+      const response = await request(server)
+        .get(`/api/users/${otherUser.userId}`)
+        .set(await createAuthHeader(testUser));
+
+      expect(response.status).toBe(403);
+    });
   });
 
   // ---------------------------------------------------------------------------
@@ -161,6 +171,19 @@ describe("UserAPI", () => {
       expect(response.status).toBe(400);
       expect(response.body.status).toBe("error");
     });
+
+    it("should return 403 when updating another user", async () => {
+      const otherUser = await generateUser({ email: "other2@test.com", username: "otheruser2" });
+
+      const response = await request(server)
+        .patch(`/api/users/${otherUser.userId}`)
+        .set("Content-Type", "application/json")
+        .set("Accept", "application/json")
+        .set(await createAuthHeader(testUser))
+        .send({ updates: { firstName: "Intruder" } });
+
+      expect(response.status).toBe(403);
+    });
   });
 
   // ---------------------------------------------------------------------------
@@ -199,6 +222,16 @@ describe("UserAPI", () => {
         .set(await createAuthHeader(testUser));
 
       expect(response.status).toBe(400);
+    });
+
+    it("should return 403 when deleting another user", async () => {
+      const otherUser = await generateUser({ email: "other3@test.com", username: "otheruser3" });
+
+      const response = await request(server)
+        .delete(`/api/users/${otherUser.userId}`)
+        .set(await createAuthHeader(testUser));
+
+      expect(response.status).toBe(403);
     });
   });
 });

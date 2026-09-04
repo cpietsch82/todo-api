@@ -14,7 +14,10 @@ import { createAuthMiddleware } from "@/middleware/authenticateToken";
 import { additionalRequestDetailsForTesting } from "@/middleware/additionalRequestDetailsForTesting";
 import { globalErrorHandler } from "@/middleware/globalErrorHandler";
 import TokenService from "../authentication/TokenService";
+import { requireAuthentication } from "@/middleware/permissions";
 // import https from "https";
+import { sql } from "drizzle-orm";
+import { db } from "@/db";
 
 // Extend Express's Response type to include custom response methods
 declare global {
@@ -147,15 +150,7 @@ export class ExpressAPI extends BaseModule {
     const authenticate = createAuthMiddleware(this.tokenService);
     this.router.use(authenticate);
     this.router.use(this.preAuthRouter);
-
-    this.router.use((req: Request, res: Response, next: NextFunction) => {
-      if (req.authenticated) {
-        next();
-      } else {
-        res.respondAuthorizationRequired();
-      }
-    });
-
+    this.router.use(requireAuthentication());
     this.router.use(additionalRequestDetailsForTesting);
 
     // security headers
@@ -203,8 +198,8 @@ export class ExpressAPI extends BaseModule {
     // api health check
     this.preAuthRouter.get("/health", async (_req: Request, res: Response) => {
       try {
-        const { db } = await import("@/db");
-        const { sql } = await import("drizzle-orm");
+        // const { db } = await import("../../db/index.js");
+        // const { sql } = await import("drizzle-orm");
         await db.execute(sql`SELECT 1`);
         res.json({
           status: "OK",

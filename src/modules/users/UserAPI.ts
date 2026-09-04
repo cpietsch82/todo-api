@@ -5,6 +5,7 @@ import { UpdateUserBody, updateUserSchema, UserByIdParams, userByIdSchema } from
 import { TypedRequest, TypedRequestParams } from "../express/Express";
 import { typedHandler } from "@/utils/typedHandler";
 import { validateBody, validateParams } from "@/middleware/validate";
+import { requirePermissions, requireUserOwnership } from "@/middleware/permissions";
 
 export class UserAPI extends APIModule {
   public static instance: UserAPI;
@@ -22,15 +23,31 @@ export class UserAPI extends APIModule {
   }
 
   protected initializeRoutes(): void {
-    this.router.get("/", this.getAllUsers.bind(this));
-    this.router.get("/:userId", validateParams(userByIdSchema), typedHandler(this.getUserById.bind(this)));
+    const requireCurrentUser = requireUserOwnership(new UserService());
+
+    this.router.get("/", requirePermissions("users:read"), this.getAllUsers.bind(this));
+    this.router.get(
+      "/:userId",
+      validateParams(userByIdSchema),
+      requirePermissions("users:read"),
+      requireCurrentUser,
+      typedHandler(this.getUserById.bind(this)),
+    );
     this.router.patch(
       "/:userId",
       validateParams(userByIdSchema),
+      requirePermissions("users:update"),
+      requireCurrentUser,
       validateBody(updateUserSchema),
       typedHandler(this.updateUser.bind(this)),
     );
-    this.router.delete("/:userId", validateParams(userByIdSchema), typedHandler(this.deleteUser.bind(this)));
+    this.router.delete(
+      "/:userId",
+      validateParams(userByIdSchema),
+      requirePermissions("users:delete"),
+      requireCurrentUser,
+      typedHandler(this.deleteUser.bind(this)),
+    );
   }
 
   private async getAllUsers(_req: Request, res: Response) {

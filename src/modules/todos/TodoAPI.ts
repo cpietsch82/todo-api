@@ -11,6 +11,7 @@ import {
   updateTodoSchema,
 } from "./schema/todo.schema";
 import { validateBody, validateParams } from "@/middleware/validate";
+import { requirePermissions, requireTodoOwnership } from "@/middleware/permissions";
 import { TypedRequest, TypedRequestBody, TypedRequestParams } from "../express/Express";
 import { typedHandler } from "@/utils/typedHandler";
 
@@ -30,24 +31,40 @@ export class TodoAPI extends APIModule {
   }
 
   protected initializeRoutes(): void {
-    this.router.get("/", this.getAllTodos.bind(this));
-    this.router.get("/:todoId", validateParams(todoByIdSchema), typedHandler(this.getTodoById.bind(this)));
-    this.router.post("/", validateBody(createTodoSchema), typedHandler(this.createTodo.bind(this)));
+    const requireTodoOwner = requireTodoOwnership(new TodoService());
+
+    this.router.get("/", requirePermissions("todos:read"), this.getAllTodos.bind(this));
+    this.router.get(
+      "/:todoId",
+      validateParams(todoByIdSchema),
+      requirePermissions("todos:read"),
+      requireTodoOwner,
+      typedHandler(this.getTodoById.bind(this)),
+    );
+    this.router.post("/", requirePermissions("todos:create"), validateBody(createTodoSchema), typedHandler(this.createTodo.bind(this)));
     this.router.patch(
       "/:todoId",
       validateParams(todoByIdSchema),
+      requirePermissions("todos:update"),
+      requireTodoOwner,
       validateBody(updateTodoSchema),
       typedHandler(this.updateTodo.bind(this)),
     );
-    this.router.delete("/:todoId", validateParams(todoByIdSchema), typedHandler(this.deleteTodo.bind(this)));
+    this.router.delete(
+      "/:todoId",
+      validateParams(todoByIdSchema),
+      requirePermissions("todos:delete"),
+      requireTodoOwner,
+      typedHandler(this.deleteTodo.bind(this)),
+    );
     // weitere API Endpoints
     // - getActiveTodos
     // - getCompletedTodos
     // => eventuell aber auch einfach eine query Route bauen mit der ich filter übergeben kann!
   }
 
-  private async getAllTodos(_req: Request, res: Response) {
-    const todos = await this.service.getAllTodos();
+  private async getAllTodos(req: Request, res: Response) {
+    const todos = await this.service.getAllTodos(req.user?.id);
     res.json(todos);
   }
 

@@ -15,8 +15,14 @@ export class TodoService extends BaseModule {
     return TodoService.instance;
   }
 
-  public async getAllTodos(): Promise<Todo[]> {
-    return db.select().from(todos).orderBy(desc(todos.createdAt));
+  public async getAllTodos(userId?: string): Promise<Todo[]> {
+    const query = db.select().from(todos);
+
+    if (userId) {
+      return query.where(eq(todos.userId, userId)).orderBy(desc(todos.createdAt));
+    }
+
+    return query.orderBy(desc(todos.createdAt));
   }
 
   public async getTodoById(todoId: string): Promise<Todo | undefined> {

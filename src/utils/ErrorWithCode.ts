@@ -13,7 +13,7 @@ type ExtendedError = {
 
 class ErrorWithCode extends Error {
   private code: string;
-  private cause?: Error;
+  public cause?: Error;
 
   static dispatch(error: ExtendedError, handlers: ErrorHandler) {
     if (!handlers) error.message = "ErrorWithCode.dispatch requires two parameters..";

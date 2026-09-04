@@ -1,6 +1,6 @@
 import { ExpressAPI } from "@modules/express/Express";
 import { TodoAPI } from "@modules/todos/TodoAPI";
-import { AuthAPI } from "@/modules/authentication/AuthAPI";
+import { AuthenticationAPI } from "@/modules/authentication/AuthenticationAPI";
 import { UserAPI } from "./modules/users/UserAPI";
 import { waitForDatabase } from "@/db";
 
@@ -8,7 +8,7 @@ async function bootstrap() {
   await waitForDatabase();
 
   const expressAPI = new ExpressAPI();
-  new AuthAPI();
+  new AuthenticationAPI();
   new TodoAPI();
   new UserAPI();
   expressAPI.listen();
