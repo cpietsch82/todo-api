@@ -41,4 +41,4 @@ homepage/
 - **Drizzle** - ORM for Database
 - **Jose** - JWT Management
 
-## TOODs
+## TODOs
