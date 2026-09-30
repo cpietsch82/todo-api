@@ -1,0 +1,41 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1772144108093,
+      "tag": "0000_ambitious_serpent_society",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1773170925573,
+      "tag": "0001_flippant_jackpot",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1753200000000,
+      "tag": "0002_add_todo_severity",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1753200100000,
+      "tag": "0003_create_todo_comments",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1757000000000,
+      "tag": "0004_add_rbac_authorization",
+      "breakpoints": true
+    }
+  ]
+}

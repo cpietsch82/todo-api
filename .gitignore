@@ -6,7 +6,4 @@ node_modules
 .env.staging
 dist/
 
-# Drizzle
-drizzle/
-
 TODOS.txt

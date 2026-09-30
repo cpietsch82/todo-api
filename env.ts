@@ -45,9 +45,6 @@ export type Env = z.infer<typeof envSchema>;
 
 let env: Env;
 
-console.log("current process.env")
-console.log(process.env)
-
 try {
   env = envSchema.parse(process.env);
 } catch (e) {
