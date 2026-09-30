@@ -8,12 +8,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    environment: development
-
-    # strategy:
-    #   matrix:
-    #     node-version: [18.x, 20.x, 22.x]
-    #     # See supported Node.js release schedule at https://nodejs.org/en/about/releases/
+    environment: production
 
     env:
       LOG_LEVEL: ${{ vars.LOG_LEVEL }}
@@ -39,14 +34,14 @@ jobs:
           node-version: 24
           cache: npm
 
-      - name: Check environment variables
-        run: |
-          echo "LOG_LEVEL=$LOG_LEVEL"
-          echo "ACCESS_TOKEN_SECRET=$ACCESS_TOKEN_SECRET"
-          echo "ALLOWED_ORIGINS=$ALLOWED_ORIGINS"
-
       - name: Install dependencies
         run: npm ci
+
+      - name: Linting
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
 
       - name: Test
         run: npm test
