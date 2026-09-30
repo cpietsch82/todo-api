@@ -18,6 +18,7 @@ jobs:
     env:
       LOG_LEVEL: ${{ vars.LOG_LEVEL }}
       ACCESS_TOKEN_SECRET: ${{ secrets.ACCESS_TOKEN_SECRET }}
+      ALLOWED_ORIGINS: ${{ vars.ALLOWED_ORIGINS }}
 
     steps:
       - name: Checkout
@@ -33,6 +34,7 @@ jobs:
         run: |
           echo "LOG_LEVEL=$LOG_LEVEL"
           echo "ACCESS_TOKEN_SECRET=$ACCESS_TOKEN_SECRET"
+          echo "ALLOWED_ORIGINS=$ALLOWED_ORIGINS"
 
       - name: Check secret exists
         run: |
