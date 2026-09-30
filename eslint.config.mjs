@@ -25,6 +25,7 @@ export default tseslint.config(
   // TypeScript-Quelldateien mit vollem Typecheck
   {
     files: ['src/**/*.ts'],
+    ignores: ['src/**/*.test.ts'],
     extends: [tseslint.configs.recommended],
     languageOptions: {
       parser: tseslint.parser,
