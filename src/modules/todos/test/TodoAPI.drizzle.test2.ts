@@ -1,12 +1,13 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import request from "supertest";
 import { ExpressAPI } from "@modules/express/Express";
+import type { Express } from "express";
 import { TodoAPI } from "@modules/todos/TodoAPI";
 import { InsertTodoSchema } from "@/modules/todos/schema/todo.schema";
 
 describe("TodoAPI with drizzle-zod", () => {
   let api: ExpressAPI;
-  let server: any;
+  let server: Express;
 
   beforeEach(() => {
     api = new ExpressAPI();
