@@ -25,6 +25,9 @@ jobs:
       REFRESH_TOKEN_TTL_MS: ${{ vars.REFRESH_TOKEN_TTL_MS }}
       RATE_LIMIT_PER_IP: ${{ vars.RATE_LIMIT_PER_IP }}
       RATE_LIMIT_WINDOW_MS: ${{ vars.RATE_LIMIT_WINDOW_MS }}
+      BCRYPT_SALT_ROUNDS: ${{ vars.BCRYPT_SALT_ROUNDS }}
+      JWT_SECRET: ${{ secrets.JWT_SECRET }}
+      DATABASE_URL: ${{ vars.DATABASE_URL }}
 
     steps:
       - name: Checkout
