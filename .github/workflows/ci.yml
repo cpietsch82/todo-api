@@ -6,9 +6,13 @@ on:
   pull_request:
 
 jobs:
-  test:
+  ci:
     runs-on: ubuntu-latest
     environment: production
+
+    permissions:
+      contents: read
+      packages: write
 
     env:
       LOG_LEVEL: ${{ vars.LOG_LEVEL }}
@@ -47,4 +51,15 @@ jobs:
         run: npm run test:run
 
       - name: Docker Image Build
-        run: docker build -t todo-api:${GITHUB_SHA::7} .
+        run: |
+          docker build -t ghcr.io/${{ github.repository_owner }}/todo-api:${GITHUB_SHA::7} .
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push Docker image
+        run: docker push ghcr.io/${{ github.repository_owner }}/todo-api:${GITHUB_SHA::7}
