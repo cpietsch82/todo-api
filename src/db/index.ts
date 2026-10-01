@@ -6,11 +6,11 @@ import env from "../../env";
 
 const connectionString = env.DATABASE_URL;
 
-// Für Queries
+// For Queries
 const client = postgres(connectionString);
 export const db = drizzle(client, { schema });
 
-// Für Migrations
+// For Migrations
 export const migrationClient = postgres(connectionString, { max: 1 });
 
 /**

@@ -1,7 +1,16 @@
 node_modules
 dist
+
 .env
 .env.test
+!.env.example
+
 .git
 .gitignore
-*.md
+
+tests
+coverage
+
+Dockerfile
+docker-compose*.yml
+README.md

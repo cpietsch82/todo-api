@@ -1,46 +1,72 @@
+# services:
+#   postgres:
+#     image: postgres:17-alpine
+#     restart: unless-stopped
+#     environment:
+#       POSTGRES_USER: postgres
+#       POSTGRES_PASSWORD: postgres
+#       POSTGRES_DB: todo_db
+#     ports:
+#       - "5432:5432"
+#     volumes:
+#       - postgres_data:/var/lib/postgresql/data
+#     healthcheck:
+#       test: ["CMD-SHELL", "pg_isready -U postgres -d todo_db"]
+#       interval: 5s
+#       timeout: 5s
+#       retries: 10
+
+#   api:
+#     build: .
+#     restart: unless-stopped
+#     ports:
+#       - "3000:3000"
+#     environment:
+#       NODE_ENV: development
+#       APP_STAGE: dev
+#       PORT: 3000
+#       DATABASE_URL: postgres://postgres:postgres@postgres:5432/todo_db
+#       ALLOWED_ORIGINS: http://localhost:3000
+#       LOG_LEVEL: info
+#       JWT_SECRET: change-me-in-production-must-be-32chars!
+#       JWT_EXPIRES_IN: 7d
+#       BCRYPT_SALT_ROUNDS: 10
+#       ACCESS_TOKEN_SECRET: change-me-access-token-secret-in-prod
+#       REFRESH_TOKEN_SECRET: change-me-refresh-token-secret-in-prod
+#       ACCESS_TOKEN_TTL: 15m
+#       REFRESH_TOKEN_TTL: 7d
+#       REFRESH_TOKEN_TTL_MS: 604800000
+#       RATE_LIMIT_PER_IP: 100
+#       RATE_LIMIT_WINDOW_MS: 900000
+#     depends_on:
+#       postgres:
+#         condition: service_healthy
+
+# volumes:
+#   postgres_data:
+
 services:
   postgres:
     image: postgres:17-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: todo_db
+      POSTGRES_USER: todouser
+      POSTGRES_PASSWORD: todopassword
+      POSTGRES_DB: tododb
+    volumes:
+      - postgres_data:/var/lib/postgresql
     ports:
       - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d todo_db"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
 
   api:
-    build: .
-    restart: unless-stopped
+    image: todo-api:latest
+    env_file:
+      - .env
     ports:
       - "3000:3000"
-    environment:
-      NODE_ENV: development
-      APP_STAGE: dev
-      PORT: 3000
-      DATABASE_URL: postgres://postgres:postgres@postgres:5432/todo_db
-      ALLOWED_ORIGINS: http://localhost:3000
-      LOG_LEVEL: info
-      JWT_SECRET: change-me-in-production-must-be-32chars!
-      JWT_EXPIRES_IN: 7d
-      BCRYPT_SALT_ROUNDS: 10
-      ACCESS_TOKEN_SECRET: change-me-access-token-secret-in-prod
-      REFRESH_TOKEN_SECRET: change-me-refresh-token-secret-in-prod
-      ACCESS_TOKEN_TTL: 15m
-      REFRESH_TOKEN_TTL: 7d
-      REFRESH_TOKEN_TTL_MS: 604800000
-      RATE_LIMIT_PER_IP: 100
-      RATE_LIMIT_WINDOW_MS: 900000
     depends_on:
-      postgres:
-        condition: service_healthy
+      - postgres
+    restart: unless-stopped
 
 volumes:
   postgres_data:

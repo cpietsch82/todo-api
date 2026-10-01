@@ -1,28 +1,32 @@
-# Stage 1: Build
-FROM node:22-alpine AS builder
+# ---------- Build ----------
+FROM node:24-alpine AS builder
 
 WORKDIR /app
 
 COPY package*.json ./
 RUN npm ci
 
-COPY . .
-RUN npm run build && npx tsc-alias
+COPY tsconfig.json ./
+COPY src ./src
+COPY env.ts ./env.ts
+COPY drizzle ./drizzle
 
-# Stage 2: Production
-FROM node:22-alpine AS production
+RUN npm run build
+
+
+# ---------- Production ----------
+FROM node:24-alpine AS production
 
 WORKDIR /app
+
+ENV NODE_ENV=production
 
 COPY package*.json ./
 RUN npm ci --omit=dev
 
 COPY --from=builder /app/dist ./dist
-COPY drizzle ./drizzle
-COPY entrypoint.sh ./entrypoint.sh
-
-RUN chmod +x entrypoint.sh
+COPY --from=builder /app/drizzle ./drizzle
 
 EXPOSE 3000
 
-ENTRYPOINT ["./entrypoint.sh"]
+CMD ["node", "dist/src/index.js"]
