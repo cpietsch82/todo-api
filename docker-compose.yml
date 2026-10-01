@@ -47,7 +47,7 @@
 
 services:
   postgres:
-    image: postgres:17-alpine
+    image: postgres:16-alpine
     restart: unless-stopped
     environment:
       POSTGRES_USER: todouser
@@ -59,7 +59,7 @@ services:
       - "5432:5432"
 
   api:
-    image: todo-api:latest
+    image: ghcr.io/cpietsch82/todo-api:latest
     env_file:
       - .env
     ports:
