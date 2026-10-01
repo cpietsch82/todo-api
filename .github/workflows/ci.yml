@@ -47,4 +47,4 @@ jobs:
         run: npm run test:run
 
       - name: Docker Image Build
-        run: docker build -t todo-api:${{GITHUB_SHA::7}} .
+        run: docker build -t todo-api:${GITHUB_SHA::7} .
