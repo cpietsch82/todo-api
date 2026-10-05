@@ -14,8 +14,18 @@ services:
       retries: 10
     restart: unless-stopped
 
+  adminer:
+    image: adminer:latest
+    container_name: todo-adminer
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
   api:
-    image: ghcr.io/cpietsch82/todo-api:latest
+    image: todo-api:latest
     env_file:
       - .env.api
     ports:
