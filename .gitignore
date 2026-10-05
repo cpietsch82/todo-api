@@ -4,6 +4,8 @@ node_modules
 .env.test
 .env.local
 .env.staging
+.env.database
+.env.api
 dist/
 
 TODOS.txt

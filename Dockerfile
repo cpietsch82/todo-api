@@ -27,6 +27,9 @@ RUN npm ci --omit=dev
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/drizzle ./drizzle
 
+COPY entrypoint.sh ./entrypoint.sh
+RUN chmod +x ./entrypoint.sh
+
 EXPOSE 3000
 
-CMD ["node", "dist/src/index.js"]
+ENTRYPOINT ["./entrypoint.sh"]
