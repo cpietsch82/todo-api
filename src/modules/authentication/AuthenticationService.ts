@@ -16,7 +16,7 @@ export class AuthenticationService extends BaseModule {
   authorizationService: AuthorizationService;
 
   constructor() {
-    super("auth.service", "Business logic for User authentication management");
+    super("authentication.service", "Business logic for User authentication management");
     this.userService = new UserService();
 
     if (!AuthenticationService.instance) {

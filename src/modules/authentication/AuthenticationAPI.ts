@@ -14,7 +14,7 @@ export class AuthenticationAPI extends APIModule {
   protected tokenService: TokenService;
 
   constructor() {
-    super("auth.api", "API Module for user authentication operations", "/auth", true);
+    super("authentication.api", "API Module for user authentication operations", "/auth", true);
 
     this.service = new AuthenticationService();
     if (!AuthenticationAPI.instance) AuthenticationAPI.instance = this;

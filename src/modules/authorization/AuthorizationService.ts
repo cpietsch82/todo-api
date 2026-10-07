@@ -10,7 +10,7 @@ export class AuthorizationService extends BaseModule {
   public static instance: AuthorizationService;
 
   constructor() {
-    super("auth.authorization.service", "Business logic for authorization role and permission resolution");
+    super("authorization.service", "Business logic for authorization role and permission resolution");
 
     if (!AuthorizationService.instance) {
       AuthorizationService.instance = this;

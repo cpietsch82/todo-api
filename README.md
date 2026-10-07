@@ -14,6 +14,9 @@ homepage/
 │   │   └── core/
 |   |     └── BaseModule.ts     # Base Class for all Modules
 |   |     └── APIModule.ts      # API Module Class to configure Express Routes
+|   |   └── authentication/     # Authentication stuff like JWT
+|   |   └── authorization/      # Authorization Module to handle user permissions
+|   |   └── express/
 │   │   └── todos/
 |   |     └── schema/
 |   |       └── todo.schema.ts
@@ -21,6 +24,7 @@ homepage/
 |   |       └── TodoAPI.test.ts
 |   |     └── TodoAPI.ts
 |   |     └── TodoService.ts
+│   │   └── users/
 │   │   └── .../
 │   ├── utils/                  # Folder with some Utlity functions
 |   |     └── asyncHandler.ts
