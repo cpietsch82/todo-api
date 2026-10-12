@@ -3,6 +3,7 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import * as schema from "./schema";
 import env from "../../env";
+import { logger } from "@/utils/logger";
 
 const connectionString = env.DATABASE_URL;
 
@@ -22,6 +23,7 @@ export async function waitForDatabase(retries = 5, delayMs = 2000): Promise<void
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       await db.execute(sql`SELECT 1`);
+      logger.info("Database connection established")
       return;
     } catch (error: unknown) {
       if (attempt === retries) {
@@ -29,7 +31,7 @@ export async function waitForDatabase(retries = 5, delayMs = 2000): Promise<void
           `Database not reachable after ${retries} attempt(s). Last error: ${error instanceof Error ? error.message : String(error)}`, {cause: error},
         );
       }
-      console.warn(`[DB] Connection attempt ${attempt}/${retries} failed — retrying in ${delayMs}ms...`);
+      logger.warn(`[DB] Connection attempt ${attempt}/${retries} failed — retrying in ${delayMs}ms...`);
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
   }

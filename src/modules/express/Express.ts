@@ -338,13 +338,14 @@ export class ExpressAPI extends BaseModule {
     // helper for HTTP methods with optional path
     const createMethodHandler = (method: HTTPMethod) => {
       return (pathOrHandler: string | RouteHandler, ...handlers: RouteHandler[]) => {
-        if (typeof pathOrHandler === "string") {
-          // path was passed: router.get('/path', handler1, handler2)
-          this.applyHandlers(method, router, [pathOrHandler, ...handlers] as RequestHandler[]);
-        } else {
-          // only handler: router.get(handler1, handler2)
-          this.applyHandlers(method, router, [pathOrHandler, ...handlers] as RequestHandler[]);
-        }
+        this.applyHandlers(method, router, [pathOrHandler, ...handlers] as RequestHandler[]);
+        // if (typeof pathOrHandler === "string") {
+        //   // path was passed: router.get('/path', handler1, handler2)
+        //   this.applyHandlers(method, router, [pathOrHandler, ...handlers] as RequestHandler[]);
+        // } else {
+        //   // only handler: router.get(handler1, handler2)
+        //   this.applyHandlers(method, router, [pathOrHandler, ...handlers] as RequestHandler[]);
+        // }
       };
     };
 
