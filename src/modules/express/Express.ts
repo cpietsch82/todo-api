@@ -18,6 +18,7 @@ import { requireAuthentication } from "@/middleware/permissions";
 // import https from "https";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
+import { VersionService } from "./VersionService";
 
 // Extend Express's Response type to include custom response methods
 declare global {
@@ -116,6 +117,7 @@ export class ExpressAPI extends BaseModule {
   protected preAuthRouter: Router;
   protected server: http.Server | null = null;
   protected tokenService: TokenService;
+  protected versionService: VersionService;
 
   static makeRequestLabel(req: Request) {
     return `${req.method ?? "request"} on ${req.originalUrl}`;
@@ -131,11 +133,10 @@ export class ExpressAPI extends BaseModule {
     this.preAuthRouter = express.Router();
 
     this.tokenService = new TokenService();
+    this.versionService = new VersionService();
 
     this.setupMiddleware();
     this.setupErrorHandling();
-
-    // this.setupAPIRoutes(); // ?? automatically initialize all necessary api packages to setup routes
 
     if (!ExpressAPI.instance) ExpressAPI.instance = this;
 
@@ -195,11 +196,16 @@ export class ExpressAPI extends BaseModule {
     // use api sub route per default
     this.app.use("/api", this.router);
 
+    // api version check
+    this.preAuthRouter.get("/version", async (_req: Request, res: Response) => {
+      const versionInfo = this.versionService.getVersionInfo()
+
+      res.json(versionInfo)
+    })
+
     // api health check
     this.preAuthRouter.get("/health", async (_req: Request, res: Response) => {
       try {
-        // const { db } = await import("../../db/index.js");
-        // const { sql } = await import("drizzle-orm");
         await db.execute(sql`SELECT 1`);
         res.json({
           status: "OK",
@@ -384,9 +390,7 @@ export class ExpressAPI extends BaseModule {
   }
 
   public async close(): Promise<void> {
-    if (!this.server) {
-      throw new Error("Server was not started yet");
-    }
+    if (!this.server) throw new Error("Server was not started yet");
 
     return new Promise((resolve, reject) => {
       this.server!.close((err) => {

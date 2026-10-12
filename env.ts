@@ -25,9 +25,7 @@ const envSchema = z.object({
   PORT: z.coerce.number().positive().default(3000),
   ALLOWED_ORIGINS: z.string(),
   LOG_LEVEL: z.enum(["info", "warn", "error", "debug", "trace", "fatal"]),
-  DATABASE_URL: z.string(), // maybe .startsWith('postgresql://')
-  // JWT_SECRET: z.string().min(32, "Must be 32 chars long"),
-  // JWT_EXPIRES_IN: z.string().default("7d"),
+  DATABASE_URL: z.string().startsWith('postgresql://'),
   BCRYPT_SALT_ROUNDS: z.coerce.number().positive().min(8),
   ACCESS_TOKEN_SECRET: z.string(),
   REFRESH_TOKEN_SECRET: z.string(),

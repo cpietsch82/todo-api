@@ -27,7 +27,7 @@ homepage/
 │   │   └── users/
 │   │   └── .../
 │   ├── utils/                  # Folder with some Utlity functions
-|   |     └── asyncHandler.ts
+|   |     └── logger.ts
 │   └── index.ts                # Application entry point
 ├── package.json
 ├── nodemon.json
