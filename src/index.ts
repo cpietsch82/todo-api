@@ -2,6 +2,7 @@ import { ExpressAPI } from "@modules/express/Express";
 import { TodoAPI } from "@modules/todos/TodoAPI";
 import { AuthenticationAPI } from "@/modules/authentication/AuthenticationAPI";
 import { UserAPI } from "./modules/users/UserAPI";
+import { AdminAPI } from "./modules/admin/AdminAPI";
 import { waitForDatabase } from "@/db";
 
 async function bootstrap() {
@@ -11,6 +12,7 @@ async function bootstrap() {
   new AuthenticationAPI();
   new TodoAPI();
   new UserAPI();
+  new AdminAPI();
   expressAPI.listen();
 
   // graceful shutdown
