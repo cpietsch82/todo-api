@@ -23,19 +23,6 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
 
-    env:
-      LOG_LEVEL: ${{ vars.LOG_LEVEL }}
-      ALLOWED_ORIGINS: ${{ vars.ALLOWED_ORIGINS }}
-      ACCESS_TOKEN_SECRET: ${{ secrets.ACCESS_TOKEN_SECRET }}
-      REFRESH_TOKEN_SECRET: ${{ secrets.REFRESH_TOKEN_SECRET }}
-      ACCESS_TOKEN_TTL: ${{ vars.ACCESS_TOKEN_TTL }}
-      REFRESH_TOKEN_TTL: ${{ vars.REFRESH_TOKEN_TTL }}
-      REFRESH_TOKEN_TTL_MS: ${{ vars.REFRESH_TOKEN_TTL_MS }}
-      RATE_LIMIT_PER_IP: ${{ vars.RATE_LIMIT_PER_IP }}
-      RATE_LIMIT_WINDOW_MS: ${{ vars.RATE_LIMIT_WINDOW_MS }}
-      BCRYPT_SALT_ROUNDS: ${{ vars.BCRYPT_SALT_ROUNDS }}
-      DATABASE_URL: ${{ vars.DATABASE_URL }}
-
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -72,6 +59,19 @@ jobs:
     needs: ci
     environment: development
 
+    env:
+      LOG_LEVEL: ${{ vars.LOG_LEVEL }}
+      ALLOWED_ORIGINS: ${{ vars.ALLOWED_ORIGINS }}
+      ACCESS_TOKEN_SECRET: ${{ secrets.ACCESS_TOKEN_SECRET }}
+      REFRESH_TOKEN_SECRET: ${{ secrets.REFRESH_TOKEN_SECRET }}
+      ACCESS_TOKEN_TTL: ${{ vars.ACCESS_TOKEN_TTL }}
+      REFRESH_TOKEN_TTL: ${{ vars.REFRESH_TOKEN_TTL }}
+      REFRESH_TOKEN_TTL_MS: ${{ vars.REFRESH_TOKEN_TTL_MS }}
+      RATE_LIMIT_PER_IP: ${{ vars.RATE_LIMIT_PER_IP }}
+      RATE_LIMIT_WINDOW_MS: ${{ vars.RATE_LIMIT_WINDOW_MS }}
+      BCRYPT_SALT_ROUNDS: ${{ vars.BCRYPT_SALT_ROUNDS }}
+      DATABASE_URL: ${{ vars.DATABASE_URL }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -106,6 +106,19 @@ jobs:
     if: github.event_name == 'release'
     needs: ci
     environment: production
+
+    env:
+      LOG_LEVEL: ${{ vars.LOG_LEVEL }}
+      ALLOWED_ORIGINS: ${{ vars.ALLOWED_ORIGINS }}
+      ACCESS_TOKEN_SECRET: ${{ secrets.ACCESS_TOKEN_SECRET }}
+      REFRESH_TOKEN_SECRET: ${{ secrets.REFRESH_TOKEN_SECRET }}
+      ACCESS_TOKEN_TTL: ${{ vars.ACCESS_TOKEN_TTL }}
+      REFRESH_TOKEN_TTL: ${{ vars.REFRESH_TOKEN_TTL }}
+      REFRESH_TOKEN_TTL_MS: ${{ vars.REFRESH_TOKEN_TTL_MS }}
+      RATE_LIMIT_PER_IP: ${{ vars.RATE_LIMIT_PER_IP }}
+      RATE_LIMIT_WINDOW_MS: ${{ vars.RATE_LIMIT_WINDOW_MS }}
+      BCRYPT_SALT_ROUNDS: ${{ vars.BCRYPT_SALT_ROUNDS }}
+      DATABASE_URL: ${{ vars.DATABASE_URL }}
 
     steps:
       - name: Checkout

@@ -57,9 +57,9 @@ try {
       console.info(`${path}:  ${err.message}`);
     });
 
-    process.exit(1);
+    if (!isTesting) process.exit(1);
   }
-  throw e;
+  if (!isTesting) throw e;
 }
 
 export const isProdEnv = () => env.APP_STAGE === "production";
