@@ -136,7 +136,6 @@ export class ExpressAPI extends BaseModule {
     this.versionService = new VersionService();
 
     this.setupMiddleware();
-    this.setupErrorHandling();
 
     if (!ExpressAPI.instance) ExpressAPI.instance = this;
 
@@ -152,6 +151,7 @@ export class ExpressAPI extends BaseModule {
     this.router.use(authenticate);
     this.router.use(this.preAuthRouter);
     this.router.use(requireAuthentication());
+    this.router.use(globalErrorHandler("Unhandled auth verification"));
     this.router.use(additionalRequestDetailsForTesting);
 
     // security headers
@@ -223,16 +223,14 @@ export class ExpressAPI extends BaseModule {
         });
       }
     });
-  }
 
-  private setupErrorHandling(): void {
     // 404 Handler
     this.app.use((req: Request, res: Response) => {
       this.logger.warn({ path: req.path, method: req.method }, "Route not found");
       res.respondNotFound(`Route ${req.path} not found.`);
     });
 
-    this.app.use(globalErrorHandler("Unhandled Error"));
+    this.app.use(globalErrorHandler("Unhandled error"));
   }
 
   // for later https availability
@@ -245,10 +243,6 @@ export class ExpressAPI extends BaseModule {
   //     key: pki.privateKeyToPem(this.credentials.privateKey),
   //     cert: this.credentials.certificateChain.map((cert) => pki.certificateToPem(cert)).join(""),
   //   };
-  // }
-
-  // getRouter() {
-  //   return this.router;
   // }
 
   /**
@@ -283,10 +277,7 @@ export class ExpressAPI extends BaseModule {
       throw new Error(
         "don't mix up your parameters please (this is otherwise reported as an express deprecation warning, which is hard to locate the origin)!",
       );
-    // if (this.debug) console.warn(ExpressAPI.makeRequestLabel(req) + " returning " + status + " because " + message);
     res.status(status);
-    // if (this.debug || returnMessage === true || req.hasPermission?.("express.see.hidden.errors")) res.send(message);
-    // res.end();
     if (returnMessage) res.send(message);
     return res.end();
   }
@@ -324,13 +315,6 @@ export class ExpressAPI extends BaseModule {
 
     const router = express.Router();
     this.useWithPaths(actualParentRouter, actualPaths, router);
-    // if (actualPaths.length > 0) {
-    //   // because typescript is sometimes to strict and cannot calculate how many paths exists during compile time
-    //   // so the only solution here is to use the apply function to avoid typescript parsing
-    //   (actualParentRouter.use as Function).apply(actualParentRouter, [...actualPaths, router]);
-    // } else {
-    //   actualParentRouter.use(router);
-    // }
 
     const subRouterRouter = express.Router();
     router.use(subRouterRouter);
@@ -339,13 +323,6 @@ export class ExpressAPI extends BaseModule {
     const createMethodHandler = (method: HTTPMethod) => {
       return (pathOrHandler: string | RouteHandler, ...handlers: RouteHandler[]) => {
         this.applyHandlers(method, router, [pathOrHandler, ...handlers] as RequestHandler[]);
-        // if (typeof pathOrHandler === "string") {
-        //   // path was passed: router.get('/path', handler1, handler2)
-        //   this.applyHandlers(method, router, [pathOrHandler, ...handlers] as RequestHandler[]);
-        // } else {
-        //   // only handler: router.get(handler1, handler2)
-        //   this.applyHandlers(method, router, [pathOrHandler, ...handlers] as RequestHandler[]);
-        // }
       };
     };
 
@@ -354,11 +331,6 @@ export class ExpressAPI extends BaseModule {
 
       use: (pathOrHandler: string | RouteHandler, ...handlers: RouteHandler[]) => {
         router.use(...([pathOrHandler, ...handlers] as Parameters<typeof router.use>));
-        // if (typeof pathOrHandler === "string") {
-        //   router.use(...([pathOrHandler, ...handlers] as Parameters<typeof router.use>));
-        // } else {
-        //   router.use(...([pathOrHandler, ...handlers] as Parameters<typeof router.use>));
-        // }
       },
 
       all: createMethodHandler("all"),

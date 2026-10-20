@@ -19,13 +19,13 @@ export default defineConfig({
       // Redirect @/db exactly to the in-memory PGlite test database.
       // The regex ensures @/db/schema and other sub-paths are NOT affected
       // and continue to resolve through the general "@" alias below.
-      { find: /^@\/db$/, replacement: path.resolve(__dirname, "./tests/test.db.ts") },
-      { find: "@middleware", replacement: path.resolve(__dirname, "./src/middleware") },
-      { find: "@db", replacement: path.resolve(__dirname, "./src/db") },
-      { find: "@utils", replacement: path.resolve(__dirname, "./src/utils") },
-      { find: "@modules", replacement: path.resolve(__dirname, "./src/modules") },
-      { find: "@tests", replacement: path.resolve(__dirname, "./tests") },
-      { find: "@", replacement: path.resolve(__dirname, "./src") },
+      { find: /^@\/db$/, replacement: path.resolve(import.meta.dirname, "./tests/test.db.ts") },
+      { find: "@middleware", replacement: path.resolve(import.meta.dirname, "./src/middleware") },
+      { find: "@db", replacement: path.resolve(import.meta.dirname, "./src/db") },
+      { find: "@utils", replacement: path.resolve(import.meta.dirname, "./src/utils") },
+      { find: "@modules", replacement: path.resolve(import.meta.dirname, "./src/modules") },
+      { find: "@tests", replacement: path.resolve(import.meta.dirname, "./tests") },
+      { find: "@", replacement: path.resolve(import.meta.dirname, "./src") },
     ],
   },
 });

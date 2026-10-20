@@ -4,6 +4,8 @@ import type { Express, Request, Response } from "express";
 import { ExpressAPI } from "@modules/express/Express";
 import { VersionService } from "@modules/express/VersionService";
 import { db } from "@/db";
+import { logger } from "@/utils/logger";
+import env from "../../../../env";
 import { createAuthHeader, generateUser, UUID_REGEX } from "@tests/test.helpers";
 import { getTestApp } from "@tests/integration.setup";
 import packageJson from "../../../../package.json";
@@ -316,6 +318,51 @@ describe("ExpressAPI", () => {
 
       expect(response.status).toBe(500);
       expect(response.text).toBe("plain string failure");
+    });
+
+    it("should add a unique error id header for 5xx errors", async () => {
+      const first = await request(server).get("/api/express-test/throw");
+      const second = await request(server).get("/api/express-test/throw");
+
+      expect(first.headers["x-error-id"]).toMatch(UUID_REGEX);
+      expect(second.headers["x-error-id"]).toMatch(UUID_REGEX);
+      expect(first.headers["x-error-id"]).not.toBe(second.headers["x-error-id"]);
+    });
+
+    it("should not add an error id header for 4xx errors", async () => {
+      const response = await request(server).get("/api/express-test/throw-with-status");
+
+      expect(response.headers["x-error-id"]).toBeUndefined();
+    });
+
+    it("should log the error id of 5xx errors", async () => {
+      const spy = vi.spyOn(logger, "error");
+
+      const response = await request(server).get("/api/express-test/throw");
+
+      expect(spy).toHaveBeenCalledWith(
+        expect.objectContaining({ errorId: response.headers["x-error-id"], status: 500 }),
+        expect.any(String),
+      );
+    });
+
+    it("should hide the message but name the error id in production", async () => {
+      vi.spyOn(env, "APP_STAGE", "get").mockReturnValue("production");
+
+      const response = await request(server).get("/api/express-test/throw");
+
+      expect(response.status).toBe(500);
+      expect(response.text).toBe(`Internal Server Error (Error ID: ${response.headers["x-error-id"]})`);
+      expect(response.text).not.toContain("sync failure");
+    });
+
+    it("should keep the message of 4xx errors in production", async () => {
+      vi.spyOn(env, "APP_STAGE", "get").mockReturnValue("production");
+
+      const response = await request(server).get("/api/express-test/throw-with-status");
+
+      expect(response.status).toBe(403);
+      expect(response.text).toBe("not allowed here");
     });
 
     it("should not expose the stack trace", async () => {
