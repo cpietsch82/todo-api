@@ -23,6 +23,12 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
 
+    env:
+      APP_STAGE: test
+      LOG_LEVEL: debug
+      ACCESS_TOKEN_SECRET: someSecret
+      REFRESH_TOKEN_SECRET: anotherSecret
+
     steps:
       - name: Checkout
         uses: actions/checkout@v6
