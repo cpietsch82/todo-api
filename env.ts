@@ -29,8 +29,8 @@ const envSchema = z.object({
   LOG_LEVEL: z.enum(["info", "warn", "error", "debug", "trace", "fatal"]).default("info"),
   DATABASE_URL: !isTesting ? z.string().startsWith('postgresql://') : z.string().default("YOUDONTKNOWME"),
   BCRYPT_SALT_ROUNDS: z.coerce.number().positive().min(8).default(10),
-  ACCESS_TOKEN_SECRET: isTesting ? z.string().optional() : z.string(),
-  REFRESH_TOKEN_SECRET: isTesting ? z.string().optional() : z.string(),
+  ACCESS_TOKEN_SECRET: isTesting ? z.string().default("myTestSecret") : z.string(),
+  REFRESH_TOKEN_SECRET: isTesting ? z.string().default("myTestRefreshSecret") : z.string(),
   ACCESS_TOKEN_TTL: z.string().default("15m"),
   REFRESH_TOKEN_TTL: z.string().default("7d"),
   REFRESH_TOKEN_TTL_MS: z.coerce
