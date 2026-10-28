@@ -7,9 +7,7 @@ import { z } from "zod";
 
 process.env.APP_STAGE = process.env.APP_STAGE || "dev";
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-const isProduction = process.env.APP_STAGE === "production";
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
+// const isProduction = process.env.APP_STAGE === "production";
 const isDevelopment = process.env.APP_STAGE === "dev";
 const isTesting = process.env.APP_STAGE === "test";
 
@@ -17,9 +15,9 @@ if (isDevelopment) {
   dotenv.config({ quiet: true });
 } else if (isTesting) {
   dotenv.config({ quiet: true, path: "./.env.test" });
+} else {
+  process.env.NODE_ENV = "production"
 }
-
-if (isProduction) process.env.NODE_ENV = "production"
 
 // for testing the database url is not necessary,
 // because we're using an in-memory database
@@ -31,8 +29,8 @@ const envSchema = z.object({
   LOG_LEVEL: z.enum(["info", "warn", "error", "debug", "trace", "fatal"]).default("info"),
   DATABASE_URL: !isTesting ? z.string().startsWith('postgresql://') : z.string().default("YOUDONTKNOWME"),
   BCRYPT_SALT_ROUNDS: z.coerce.number().positive().min(8).default(10),
-  ACCESS_TOKEN_SECRET: z.string(),
-  REFRESH_TOKEN_SECRET: z.string(),
+  ACCESS_TOKEN_SECRET: isTesting ? z.string().optional() : z.string(),
+  REFRESH_TOKEN_SECRET: isTesting ? z.string().optional() : z.string(),
   ACCESS_TOKEN_TTL: z.string().default("15m"),
   REFRESH_TOKEN_TTL: z.string().default("7d"),
   REFRESH_TOKEN_TTL_MS: z.coerce
