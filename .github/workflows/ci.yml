@@ -23,10 +23,6 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
 
-    env:
-      APP_STAGE: test
-      LOG_LEVEL: debug
-
     steps:
       - name: Checkout
         uses: actions/checkout@v6
