@@ -5,6 +5,9 @@ import env from "../../../env";
 import UserService from "../users/UserService";
 import { buildJwtClaims, type Permission } from "../authorization/permissions";
 import AuthorizationService from "../authorization/AuthorizationService";
+import { db } from "@/db";
+import { eq, lt } from "drizzle-orm";
+import { refreshTokens } from "./schema/authentication.schema";
 
 export interface JwtPayload extends JWTPayload {
   id: string;
@@ -17,13 +20,6 @@ export interface JwtPayload extends JWTPayload {
 export interface TokenPair {
   accessToken: string;
   refreshToken: string;
-}
-
-export interface StoredRefreshToken {
-  token: string;
-  id: string; // could be replaced with userId or another unique property of the JwtPayload
-  expiresAt: Date;
-  createdAt: Date;
 }
 
 class TokenService extends BaseModule {
@@ -45,9 +41,11 @@ class TokenService extends BaseModule {
   }
 
   // ---------------------------------------------------------------------------
-  // In-memory store – replace with Firestore / Redis in production
+  // Refresh tokens are persisted in the refresh_tokens table (only as sha256 hash)
   // ---------------------------------------------------------------------------
-  public refreshTokenStore = new Map<string, StoredRefreshToken>();
+  private hashToken(token: string): string {
+    return crypto.createHash("sha256").update(token).digest("hex");
+  }
 
   async generateAccessToken(payload: JwtPayload): Promise<string> {
     const secret = env.ACCESS_TOKEN_SECRET;
@@ -60,16 +58,15 @@ class TokenService extends BaseModule {
       .sign(secretKey);
   }
 
-  generateRefreshToken(id: string): string {
+  async generateRefreshToken(id: string): Promise<string> {
     // Cryptographically random opaque token (not a JWT) – harder to forge,
     // easier to revoke without sharing secrets.
     const token = crypto.randomBytes(64).toString("hex");
 
-    this.refreshTokenStore.set(token, {
-      token,
-      id,
+    await db.insert(refreshTokens).values({
+      userId: id,
+      tokenHash: this.hashToken(token),
       expiresAt: new Date(Date.now() + env.REFRESH_TOKEN_TTL_MS),
-      createdAt: new Date(),
     });
 
     return token;
@@ -78,7 +75,7 @@ class TokenService extends BaseModule {
   async generateTokenPair(payload: JwtPayload) {
     return {
       accessToken: await this.generateAccessToken(payload),
-      refreshToken: this.generateRefreshToken(payload.id),
+      refreshToken: await this.generateRefreshToken(payload.id),
     };
   }
 
@@ -94,40 +91,52 @@ class TokenService extends BaseModule {
   }
 
   async rotateRefreshToken(incomingToken: string): Promise<{ tokenPair: TokenPair; id: string }> {
-    const stored = this.refreshTokenStore.get(incomingToken);
+    // Invalidate the used token immediately (rotation – prevents replay attacks).
+    // Delete and read happen in one statement, so a token can never be redeemed twice, even concurrently.
+    const [stored] = await db
+      .delete(refreshTokens)
+      .where(eq(refreshTokens.tokenHash, this.hashToken(incomingToken)))
+      .returning();
 
     if (!stored) {
       throw new Error("REFRESH_TOKEN_INVALID");
     }
 
     if (stored.expiresAt < new Date()) {
-      this.refreshTokenStore.delete(incomingToken);
       throw new Error("REFRESH_TOKEN_EXPIRED");
     }
 
-    // Invalidate the used token immediately (rotation – prevents replay attacks)
-    this.refreshTokenStore.delete(incomingToken);
-
-    const user = await this.userService.getUserById(stored.id);
+    const user = await this.userService.getUserById(stored.userId);
     if (!user) throw new Error("UNKNOWN_USER");
-    const authorization = await this.authorizationService.getAuthorizationForUser(stored.id);
+    const authorization = await this.authorizationService.getAuthorizationForUser(stored.userId);
     const tokenPair = await this.generateTokenPair(buildJwtClaims(user, authorization));
 
-    return { tokenPair, id: stored.id };
+    return { tokenPair, id: stored.userId };
   }
 
   // ---------------------------------------------------------------------------
   // Revocation
   // ---------------------------------------------------------------------------
 
-  revokeRefreshToken(token: string): void {
-    this.refreshTokenStore.delete(token);
+  async revokeRefreshToken(token: string): Promise<void> {
+    await db.delete(refreshTokens).where(eq(refreshTokens.tokenHash, this.hashToken(token)));
   }
 
-  revokeAllRefreshTokensForUser(id: string): void {
-    for (const [key, value] of this.refreshTokenStore) {
-      if (value.id === id) this.refreshTokenStore.delete(key);
-    }
+  async revokeAllRefreshTokensForUser(id: string): Promise<void> {
+    await db.delete(refreshTokens).where(eq(refreshTokens.userId, id));
+  }
+
+  /**
+   * Removes all expired refresh tokens, e.g. to be called by a cleanup job.
+   * @returns the number of removed tokens
+   */
+  async deleteExpiredRefreshTokens(): Promise<number> {
+    const removed = await db
+      .delete(refreshTokens)
+      .where(lt(refreshTokens.expiresAt, new Date()))
+      .returning({ refreshTokenId: refreshTokens.refreshTokenId });
+
+    return removed.length;
   }
 }
 
