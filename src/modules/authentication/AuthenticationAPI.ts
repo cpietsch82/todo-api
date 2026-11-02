@@ -88,7 +88,7 @@ export class AuthenticationAPI extends APIModule {
    */
   private async logout(req: TypedRequestBody<RefreshBody>, res: Response) {
     const { refreshToken } = req.body;
-    if (refreshToken) this.service.revokeRefreshToken(refreshToken);
+    if (refreshToken) await this.service.revokeRefreshToken(refreshToken);
     res.json({ message: "Logged out successfully" });
   }
 }

@@ -100,7 +100,7 @@ export class AuthenticationService extends BaseModule {
   }
 
   async revokeRefreshToken(incomingToken: string) {
-    this.tokenService.revokeRefreshToken(incomingToken);
+    await this.tokenService.revokeRefreshToken(incomingToken);
   }
 }
 
