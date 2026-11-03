@@ -27,6 +27,10 @@ declare global {
       respondError: (message: string, status?: number, returnMessage?: boolean) => Response;
       respondAuthorizationRequired: (message?: string, returnMessage?: boolean) => Response;
       respondAuthorizationInsufficient: (message?: string, returnMessage?: boolean) => Response;
+      respondBadRequest: (message?: string, returnMessage?: boolean) => Response;
+      respondConflict: (message?: string, returnMessage?: boolean) => Response;
+      respondTooManyRequests: (message?: string, returnMessage?: boolean) => Response;
+      respondInternalServerError: (message?: string, returnMessage?: boolean) => Response;
       respondMissingParameter: (param: string, status?: number, returnMessage?: boolean) => Response;
       respondMissingBody: (status?: number, returnMessage?: boolean) => Response;
       respondInvalidParameter: (
@@ -176,7 +180,7 @@ export class ExpressAPI extends BaseModule {
       legacyHeaders: false,
       handler: (req, res) => {
         this.logger.warn({ ip: req.ip, path: req.path }, "Rate limit exceeded");
-        res.respondError("Too many requests from this IP, please try again later.", 429);
+        res.respondTooManyRequests("Too many requests from this IP, please try again later.");
       },
     });
     this.app.use("/api/", limiter);
@@ -255,6 +259,14 @@ export class ExpressAPI extends BaseModule {
       res.respondError(message, 401, returnMessage);
     res.respondAuthorizationInsufficient = (message = "Insufficient Permissions!", returnMessage = false) =>
       res.respondError(message, 403, returnMessage);
+    // the messages of the following helpers are always written by us, so they are sent by default
+    res.respondBadRequest = (message = "Bad request", returnMessage = true) =>
+      res.respondError(message, 400, returnMessage);
+    res.respondConflict = (message = "Conflict", returnMessage = true) => res.respondError(message, 409, returnMessage);
+    res.respondTooManyRequests = (message = "Too many requests", returnMessage = true) =>
+      res.respondError(message, 429, returnMessage);
+    res.respondInternalServerError = (message = "Internal Server Error", returnMessage = true) =>
+      res.respondError(message, 500, returnMessage);
     res.respondMissingParameter = (param, status = 400, returnMessage = true) =>
       res.respondError(`missing parameter ${param}`, status, returnMessage);
     res.respondMissingBody = (status = 400, returnMessage = true) =>

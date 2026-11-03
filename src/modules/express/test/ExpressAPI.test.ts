@@ -1,10 +1,11 @@
-import { describe, it, expect, beforeAll, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
 import request from "supertest";
 import type { Express, Request, Response } from "express";
 import { ExpressAPI } from "@modules/express/Express";
 import { VersionService } from "@modules/express/VersionService";
 import { db } from "@/db";
 import { logger } from "@/utils/logger";
+import { HttpError } from "@/utils/HttpError";
 import env from "../../../../env";
 import { createAuthHeader, generateUser, UUID_REGEX } from "@tests/test.helpers";
 import { getTestApp } from "@tests/integration.setup";
@@ -33,6 +34,12 @@ describe("ExpressAPI", () => {
     open.get("/respond-service-unavailable", (_req: Request, res: Response) =>
       res.respondServiceUnavailable("maintenance"),
     );
+    open.get("/respond-bad-request", (_req: Request, res: Response) => res.respondBadRequest());
+    open.get("/respond-bad-request-custom", (_req: Request, res: Response) => res.respondBadRequest("check your input"));
+    open.get("/respond-conflict", (_req: Request, res: Response) => res.respondConflict());
+    open.get("/respond-conflict-custom", (_req: Request, res: Response) => res.respondConflict("already exists"));
+    open.get("/respond-too-many-requests", (_req: Request, res: Response) => res.respondTooManyRequests());
+    open.get("/respond-internal-server-error", (_req: Request, res: Response) => res.respondInternalServerError());
     open.get("/respond-no-content", (_req: Request, res: Response) => res.respondOkNoContent());
     open.get("/respond-not-found", (_req: Request, res: Response) => res.respondNotFound());
     open.get("/respond-not-found-custom", (_req: Request, res: Response) => res.respondNotFound("no todo here"));
@@ -43,13 +50,41 @@ describe("ExpressAPI", () => {
       throw new Error("async failure");
     });
     open.get("/throw-with-status", () => {
-      throw Object.assign(new Error("not allowed here"), { status: 403 });
+      throw Object.assign(new Error("internal details"), { status: 403 });
     });
     open.get("/throw-with-status-code", () => {
-      throw Object.assign(new Error("slow down"), { statusCode: 429 });
+      throw Object.assign(new Error("internal details"), { statusCode: 429 });
     });
     open.get("/throw-invalid-status", () => {
       throw Object.assign(new Error("weird status"), { status: 200 });
+    });
+    open.get("/throw-exposed", () => {
+      throw Object.assign(new Error("visible for the client"), { status: 422, expose: true });
+    });
+    open.get("/throw-http-error", () => {
+      throw HttpError.forbidden("not allowed here");
+    });
+    open.get("/throw-http-error-conflict", () => {
+      throw HttpError.conflict("already taken");
+    });
+    open.get("/throw-http-error-unauthorized", () => {
+      throw HttpError.unauthorized("who are you");
+    });
+    open.get("/throw-http-error-not-found", () => {
+      throw HttpError.notFound("no such thing");
+    });
+    open.get("/throw-http-error-bad-request", () => {
+      throw HttpError.badRequest("that is wrong");
+    });
+    open.get("/throw-unique-violation", () => {
+      throw Object.assign(new Error("Failed query: insert into users ... params: secret@mail.com"), {
+        cause: Object.assign(new Error("duplicate key value"), { code: "23505" }),
+      });
+    });
+    open.get("/throw-foreign-key-violation", () => {
+      throw Object.assign(new Error("Failed query: insert into todos ..."), {
+        cause: Object.assign(new Error("violates foreign key constraint"), { code: "23503" }),
+      });
     });
     open.get("/throw-string", () => {
       throw "plain string failure";
@@ -278,46 +313,88 @@ describe("ExpressAPI", () => {
   // Global error handler
   // ---------------------------------------------------------------------------
   describe("global error handler", () => {
-    it("should return 500 with the error message when a handler throws synchronously", async () => {
+    it("should hide the message of an unexpected error and name the error id", async () => {
       const response = await request(server).get("/api/express-test/throw");
 
       expect(response.status).toBe(500);
-      expect(response.text).toBe("sync failure");
+      expect(response.text).toBe(`Internal Server Error (Error ID: ${response.headers["x-error-id"]})`);
+      expect(response.text).not.toContain("sync failure");
     });
 
-    it("should return 500 with the error message when an async handler rejects", async () => {
+    it("should hide the message of a rejected async handler", async () => {
       const response = await request(server).get("/api/express-test/throw-async");
 
       expect(response.status).toBe(500);
-      expect(response.text).toBe("async failure");
+      expect(response.text).not.toContain("async failure");
     });
 
-    it("should use the status of the error and its message as response text", async () => {
+    it("should use the status of the error but not expose its message", async () => {
       const response = await request(server).get("/api/express-test/throw-with-status");
 
       expect(response.status).toBe(403);
-      expect(response.text).toBe("not allowed here");
+      expect(response.text).toBe("Forbidden");
+      expect(response.headers["x-error-id"]).toBeUndefined();
     });
 
     it("should also support the statusCode property", async () => {
       const response = await request(server).get("/api/express-test/throw-with-status-code");
 
       expect(response.status).toBe(429);
-      expect(response.text).toBe("slow down");
+      expect(response.text).toBe("Too Many Requests");
     });
 
     it("should fall back to 500 when the error carries no error status", async () => {
       const response = await request(server).get("/api/express-test/throw-invalid-status");
 
       expect(response.status).toBe(500);
-      expect(response.text).toBe("weird status");
+      expect(response.text).not.toContain("weird status");
     });
 
     it("should handle thrown values that are not an Error", async () => {
       const response = await request(server).get("/api/express-test/throw-string");
 
       expect(response.status).toBe(500);
-      expect(response.text).toBe("plain string failure");
+      expect(response.text).not.toContain("plain string failure");
+    });
+
+    it("should expose the message of errors that flag themselves with expose", async () => {
+      const response = await request(server).get("/api/express-test/throw-exposed");
+
+      expect(response.status).toBe(422);
+      expect(response.text).toBe("visible for the client");
+    });
+
+    it("should expose the message of an HttpError with its status", async () => {
+      const cases = [
+        ["throw-http-error", 403, "not allowed here"],
+        ["throw-http-error-conflict", 409, "already taken"],
+        ["throw-http-error-unauthorized", 401, "who are you"],
+        ["throw-http-error-not-found", 404, "no such thing"],
+        ["throw-http-error-bad-request", 400, "that is wrong"],
+      ] as const;
+
+      for (const [route, status, message] of cases) {
+        const response = await request(server).get(`/api/express-test/${route}`);
+
+        expect(response.status).toBe(status);
+        expect(response.text).toBe(message);
+        expect(response.headers["x-error-id"]).toBeUndefined();
+      }
+    });
+
+    it("should map a unique violation to 409 without leaking the query", async () => {
+      const response = await request(server).get("/api/express-test/throw-unique-violation");
+
+      expect(response.status).toBe(409);
+      expect(response.text).toBe("Resource already exists");
+      expect(response.text).not.toContain("secret@mail.com");
+    });
+
+    it("should map a foreign key violation to 400 without leaking the query", async () => {
+      const response = await request(server).get("/api/express-test/throw-foreign-key-violation");
+
+      expect(response.status).toBe(400);
+      expect(response.text).toBe("Referenced resource does not exist");
     });
 
     it("should add a unique error id header for 5xx errors", async () => {
@@ -330,45 +407,65 @@ describe("ExpressAPI", () => {
     });
 
     it("should not add an error id header for 4xx errors", async () => {
-      const response = await request(server).get("/api/express-test/throw-with-status");
+      const response = await request(server).get("/api/express-test/throw-http-error");
 
       expect(response.headers["x-error-id"]).toBeUndefined();
     });
 
-    it("should log the error id of 5xx errors", async () => {
+    it("should log the error id and the real message of 5xx errors", async () => {
       const spy = vi.spyOn(logger, "error");
 
       const response = await request(server).get("/api/express-test/throw");
 
       expect(spy).toHaveBeenCalledWith(
         expect.objectContaining({ errorId: response.headers["x-error-id"], status: 500 }),
-        expect.any(String),
+        expect.stringContaining("sync failure"),
       );
     });
 
-    it("should hide the message but name the error id in production", async () => {
-      vi.spyOn(env, "APP_STAGE", "get").mockReturnValue("production");
+    it("should return a parser message for a malformed JSON body", async () => {
+      const response = await request(server)
+        .post("/api/express-methods")
+        .set("Content-Type", "application/json")
+        .send("{ not valid json");
 
-      const response = await request(server).get("/api/express-test/throw");
-
-      expect(response.status).toBe(500);
-      expect(response.text).toBe(`Internal Server Error (Error ID: ${response.headers["x-error-id"]})`);
-      expect(response.text).not.toContain("sync failure");
+      expect(response.status).toBe(400);
+      expect(response.text).toContain("JSON");
     });
 
-    it("should keep the message of 4xx errors in production", async () => {
-      vi.spyOn(env, "APP_STAGE", "get").mockReturnValue("production");
-
-      const response = await request(server).get("/api/express-test/throw-with-status");
-
-      expect(response.status).toBe(403);
-      expect(response.text).toBe("not allowed here");
-    });
-
-    it("should not expose the stack trace", async () => {
+    it("should not expose the stack trace by default", async () => {
       const response = await request(server).get("/api/express-test/throw");
 
       expect(response.text).not.toContain("at ");
+    });
+
+    describe("with EXPOSE_ERROR_DETAILS enabled", () => {
+      beforeEach(() => {
+        vi.spyOn(env, "EXPOSE_ERROR_DETAILS", "get").mockReturnValue(true);
+      });
+
+      it("should send message and stack trace of an unexpected error", async () => {
+        const response = await request(server).get("/api/express-test/throw");
+
+        expect(response.status).toBe(500);
+        expect(response.text).toContain("sync failure");
+        expect(response.text).toContain("at ");
+        expect(response.headers["x-error-id"]).toMatch(UUID_REGEX);
+      });
+
+      it("should show the real message of a database error but keep its status", async () => {
+        const response = await request(server).get("/api/express-test/throw-unique-violation");
+
+        expect(response.status).toBe(409);
+        expect(response.text).toContain("Failed query");
+      });
+
+      it("should keep the message of an HttpError without a stack trace", async () => {
+        const response = await request(server).get("/api/express-test/throw-http-error");
+
+        expect(response.status).toBe(403);
+        expect(response.text).toBe("not allowed here");
+      });
     });
   });
 
@@ -435,6 +532,40 @@ describe("ExpressAPI", () => {
 
       expect(response.status).toBe(503);
       expect(response.text).toBe("maintenance");
+    });
+
+    it("respondBadRequest should return 400 with the default and a custom message", async () => {
+      const defaultResponse = await request(server).get("/api/express-test/respond-bad-request");
+      const customResponse = await request(server).get("/api/express-test/respond-bad-request-custom");
+
+      expect(defaultResponse.status).toBe(400);
+      expect(defaultResponse.text).toBe("Bad request");
+      expect(customResponse.status).toBe(400);
+      expect(customResponse.text).toBe("check your input");
+    });
+
+    it("respondConflict should return 409 with the default and a custom message", async () => {
+      const defaultResponse = await request(server).get("/api/express-test/respond-conflict");
+      const customResponse = await request(server).get("/api/express-test/respond-conflict-custom");
+
+      expect(defaultResponse.status).toBe(409);
+      expect(defaultResponse.text).toBe("Conflict");
+      expect(customResponse.status).toBe(409);
+      expect(customResponse.text).toBe("already exists");
+    });
+
+    it("respondTooManyRequests should return 429", async () => {
+      const response = await request(server).get("/api/express-test/respond-too-many-requests");
+
+      expect(response.status).toBe(429);
+      expect(response.text).toBe("Too many requests");
+    });
+
+    it("respondInternalServerError should return 500 with the default message", async () => {
+      const response = await request(server).get("/api/express-test/respond-internal-server-error");
+
+      expect(response.status).toBe(500);
+      expect(response.text).toBe("Internal Server Error");
     });
 
     it("respondOkNoContent should return 204 without a body", async () => {

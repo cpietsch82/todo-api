@@ -22,9 +22,8 @@ class ErrorWithCode extends Error {
   }
 
   constructor(message: string, code: string, cause?: Error) {
-    super(message);
+    super(message, cause === undefined ? undefined : { cause });
     this.code = code;
-    if (cause) this.cause = cause;
   }
 }
 

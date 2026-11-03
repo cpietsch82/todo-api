@@ -4,8 +4,14 @@ import { AuthenticationAPI } from "@/modules/authentication/AuthenticationAPI";
 import { UserAPI } from "./modules/users/UserAPI";
 import { AdminAPI } from "./modules/admin/AdminAPI";
 import { waitForDatabase } from "@/db";
+import env from "../env";
+import { logger } from "@/utils/logger";
 
 async function bootstrap() {
+  if (env.EXPOSE_ERROR_DETAILS) {
+    logger.warn("EXPOSE_ERROR_DETAILS is enabled: complete error messages and stack traces are sent to clients");
+  }
+
   await waitForDatabase();
 
   const expressAPI = new ExpressAPI();

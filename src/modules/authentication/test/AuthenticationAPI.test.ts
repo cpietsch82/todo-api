@@ -105,6 +105,27 @@ describe("AuthAPI", () => {
       expect(response.body.status).toBe("error");
     });
 
+    it("should return 409 with a generic message and no sql when the email is already registered", async () => {
+      await request(server).post("/api/auth/register").send(VALID_REGISTER_PAYLOAD);
+
+      const response = await request(server).post("/api/auth/register").send(VALID_REGISTER_PAYLOAD);
+
+      expect(response.status).toBe(409);
+      expect(response.text).toBe("Email or username already in use");
+      expect(response.text).not.toContain(VALID_REGISTER_PAYLOAD.email);
+    });
+
+    it("should return the same 409 when only the username is already taken", async () => {
+      await request(server).post("/api/auth/register").send(VALID_REGISTER_PAYLOAD);
+
+      const response = await request(server)
+        .post("/api/auth/register")
+        .send({ ...VALID_REGISTER_PAYLOAD, email: "other@example.com" });
+
+      expect(response.status).toBe(409);
+      expect(response.text).toBe("Email or username already in use");
+    });
+
     it("should return 409 or 500 when registering with a duplicate email", async () => {
       // first registration succeeds
       await request(server)
@@ -191,7 +212,8 @@ describe("AuthAPI", () => {
         .set("Content-Type", "application/json")
         .send({ email: "ghost@example.com", password: "somePassword123" });
 
-      expect(response.status).toBeGreaterThanOrEqual(400);
+      expect(response.status).toBe(401);
+      expect(response.text).toBe("Invalid credentials");
     });
 
     it("should return an error for a wrong password", async () => {
@@ -205,7 +227,8 @@ describe("AuthAPI", () => {
         .set("Content-Type", "application/json")
         .send({ email: VALID_REGISTER_PAYLOAD.email, password: "wrongPassword123" });
 
-      expect(response.status).toBeGreaterThanOrEqual(400);
+      expect(response.status).toBe(401);
+      expect(response.text).toBe("Invalid credentials");
     });
   });
 
@@ -256,6 +279,7 @@ describe("AuthAPI", () => {
         .send({ refreshToken });
 
       expect(replayResponse.status).toBe(401);
+      expect(replayResponse.text).toBe("Invalid refresh token");
     });
 
     it("should return 400 when refreshToken is missing from the body", async () => {
@@ -274,6 +298,7 @@ describe("AuthAPI", () => {
         .send({ refreshToken: "this-is-not-a-valid-refresh-token" });
 
       expect(response.status).toBe(401);
+      expect(response.text).toBe("Invalid refresh token");
     });
   });
 

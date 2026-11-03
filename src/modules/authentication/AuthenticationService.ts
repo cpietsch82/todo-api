@@ -8,6 +8,8 @@ import { eq } from "drizzle-orm";
 import TokenService from "./TokenService";
 import { buildJwtClaims } from "../authorization/permissions";
 import AuthorizationService from "../authorization/AuthorizationService";
+import { HttpError } from "@/utils/HttpError";
+import { isUniqueViolation } from "@/utils/dbErrors";
 
 export class AuthenticationService extends BaseModule {
   public static instance: AuthenticationService;
@@ -36,24 +38,30 @@ export class AuthenticationService extends BaseModule {
     firstName: string | undefined,
     lastName: string | undefined,
   ) {
-    const user = await db.transaction(async (tx) => {
-      const [user] = await tx
-        .insert(users)
-        .values({
-          email,
-          username,
-          firstName,
-          lastName,
-        })
-        .returning();
+    const user = await db
+      .transaction(async (tx) => {
+        const [user] = await tx
+          .insert(users)
+          .values({
+            email,
+            username,
+            firstName,
+            lastName,
+          })
+          .returning();
 
-      await tx.insert(authentications).values({
-        userId: user.userId,
-        password: await hashPassword(password),
+        await tx.insert(authentications).values({
+          userId: user.userId,
+          password: await hashPassword(password),
+        });
+
+        return user;
+      })
+      .catch((error: unknown) => {
+        // the message does not tell whether the email or the username is taken
+        if (isUniqueViolation(error)) throw HttpError.conflict("Email or username already in use", error);
+        throw error;
       });
-
-      return user;
-    });
 
     await this.authorizationService.assignRoleToUser(user.userId, "user");
     const authorization = await this.authorizationService.getAuthorizationForUser(user.userId);
@@ -78,15 +86,15 @@ export class AuthenticationService extends BaseModule {
       where: eq(users.email, email),
     });
 
-    if (!user) throw Error("Invalid credentials");
+    if (!user) throw HttpError.unauthorized("Invalid credentials");
 
     const authentication = await db.query.authentications.findFirst({
       where: eq(authentications.userId, user.userId),
     });
-    if (!authentication) throw Error("Invalid credentials");
+    if (!authentication) throw HttpError.unauthorized("Invalid credentials");
 
     const isValidatedPassword = await comparePasswords(password, authentication.password);
-    if (!isValidatedPassword) throw Error("Invalid credentials");
+    if (!isValidatedPassword) throw HttpError.unauthorized("Invalid credentials");
     const authorization = await this.authorizationService.getAuthorizationForUser(user.userId);
     const tokenPair = await this.tokenService.generateTokenPair(buildJwtClaims(user, authorization));
 
@@ -94,9 +102,18 @@ export class AuthenticationService extends BaseModule {
   }
 
   async rotateRefreshToken(incomingToken: string) {
-    const { tokenPair } = await this.tokenService.rotateRefreshToken(incomingToken);
+    try {
+      const { tokenPair } = await this.tokenService.rotateRefreshToken(incomingToken);
 
-    return tokenPair;
+      return tokenPair;
+    } catch (error) {
+      // all reasons (unknown, expired, deleted user) look the same to the client
+      const knownReasons = ["REFRESH_TOKEN_INVALID", "REFRESH_TOKEN_EXPIRED", "UNKNOWN_USER"];
+      if (error instanceof Error && knownReasons.includes(error.message)) {
+        throw HttpError.unauthorized("Invalid refresh token", error);
+      }
+      throw error;
+    }
   }
 
   async revokeRefreshToken(incomingToken: string) {

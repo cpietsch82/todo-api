@@ -21,7 +21,7 @@ if (isDevelopment) {
 
 // for testing the database url is not necessary,
 // because we're using an in-memory database
-const envSchema = z.object({
+export const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   APP_STAGE: z.enum(["dev", "test", "production"]).default("dev"),
   PORT: z.coerce.number().positive().default(3000),
@@ -39,6 +39,11 @@ const envSchema = z.object({
     .default(7 * 24 * 60 * 60 * 1000),
   RATE_LIMIT_PER_IP: z.coerce.number().positive().min(100).default(1000),
   RATE_LIMIT_WINDOW_MS: z.coerce.number().positive().default(900000), // 15 minutes
+  // developer flag: send the complete error (message and stack) in the response instead of a generic text
+  EXPOSE_ERROR_DETAILS: z.stringbool().default(false),
+}).refine((config) => !(config.APP_STAGE === "production" && config.EXPOSE_ERROR_DETAILS), {
+  message: "EXPOSE_ERROR_DETAILS must not be enabled in production",
+  path: ["EXPOSE_ERROR_DETAILS"],
 });
 
 export type Env = z.infer<typeof envSchema>;

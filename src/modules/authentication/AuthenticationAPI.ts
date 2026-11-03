@@ -71,16 +71,8 @@ export class AuthenticationAPI extends APIModule {
   private async refresh(req: TypedRequestBody<RefreshBody>, res: Response) {
     const { refreshToken } = req.body;
 
-    if (!refreshToken) {
-      return res.status(400).json({ error: "refreshToken is required" });
-    }
-
-    try {
-      const tokenPair = await this.authenticationService.rotateRefreshToken(refreshToken);
-      res.json(tokenPair);
-    } catch (err: Error | unknown) {
-      res.status(401).json({ error: err instanceof Error ? err.message : "Unknown error" });
-    }
+    const tokenPair = await this.authenticationService.rotateRefreshToken(refreshToken);
+    res.json(tokenPair);
   }
 
   /**

@@ -53,7 +53,7 @@ Validated at startup in `env.ts` (the process exits when something is missing or
 
 | Variable | Description |
 |---|---|
-| `APP_STAGE` | `dev`, `test` or `production` (in production internal error messages are hidden) |
+| `APP_STAGE` | `dev`, `test` or `production` |
 | `PORT` | Port of the API (default `3000`) |
 | `DATABASE_URL` | Must start with `postgresql://` (not needed for tests) |
 | `ALLOWED_ORIGINS` | Comma separated list of allowed CORS origins |
@@ -62,6 +62,7 @@ Validated at startup in `env.ts` (the process exits when something is missing or
 | `ACCESS_TOKEN_TTL` | Lifetime of the access token, e.g. `15m` |
 | `REFRESH_TOKEN_TTL` / `REFRESH_TOKEN_TTL_MS` | Lifetime of the refresh token (`REFRESH_TOKEN_TTL_MS` is used) |
 | `BCRYPT_SALT_ROUNDS` | Cost factor for bcrypt (min. 8) |
+| `EXPOSE_ERROR_DETAILS` | Developer flag (default `false`): responses contain the complete error message and stack trace of unexpected errors. The API refuses to start with it when `APP_STAGE=production` |
 | `RATE_LIMIT_PER_IP` / `RATE_LIMIT_WINDOW_MS` | Requests per IP (min. 100) within the time window |
 
 The Postgres container reads `POSTGRES_USER`, `POSTGRES_PASSWORD` and `POSTGRES_DB` from `.env.database`,
@@ -100,6 +101,20 @@ All routes live under `/api`. Everything except the routes marked as public requ
 
 Permissions (`todos:read`, `users:delete`, ...) are defined in `src/modules/authorization/permissions.ts`;
 `admin:all` grants every permission.
+
+## Error Handling
+
+Errors are answered by `globalErrorHandler` (`src/middleware/globalErrorHandler.ts`) through the response helpers
+of `ExpressAPI` (`respondBadRequest`, `respondConflict`, `respondAuthorizationRequired`, ...).
+
+- Throw an `HttpError` (`src/utils/HttpError.ts`, e.g. `HttpError.conflict("...")`) when the message is meant for the client.
+- Unique and foreign key violations of the database are mapped to 409 and 400 without exposing the query.
+- Every other error is answered with a generic text. For 5xx errors it contains an error id
+  (`Internal Server Error (Error ID: ...)`, also sent as `X-Error-ID` header) which can be looked up in the logs.
+- Logged errors are cleaned by the serializer in `src/utils/logger.ts`: the values of failed database queries
+  (e.g. emails or password hashes) are replaced by `[REDACTED]`, and common secret fields (`password`, `token`,
+  `refreshToken`, `authorization`, ...) are censored when they are logged as part of an object.
+- For development set `EXPOSE_ERROR_DETAILS=true` to receive the complete message and stack trace in the response.
 
 ## Project Structure
 
