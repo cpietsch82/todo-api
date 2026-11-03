@@ -97,6 +97,15 @@ describe("AuthorizationService", () => {
       expect(result.permissions).toHaveLength(ROLE_PERMISSIONS.admin.length);
     });
 
+    it("should resolve users:list only for the admin role", async () => {
+      const normalUser = await service.getAuthorizationForUser(testUser.userId);
+      await service.assignRoleToUser(testUser.userId, "admin");
+      const admin = await service.getAuthorizationForUser(testUser.userId);
+
+      expect(normalUser.permissions).not.toContain("users:list");
+      expect(admin.permissions).toContain("users:list");
+    });
+
     it("should merge multiple roles without duplicate permissions", async () => {
       await service.assignRoleToUser(testUser.userId, "user");
       await service.assignRoleToUser(testUser.userId, "admin");

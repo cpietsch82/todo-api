@@ -25,7 +25,7 @@ export class UserAPI extends APIModule {
   protected initializeRoutes(): void {
     const requireCurrentUser = requireUserOwnership(new UserService());
 
-    this.router.get("/", requirePermissions("users:read"), this.getAllUsers.bind(this));
+    this.router.get("/", requirePermissions("users:list"), this.getAllUsers.bind(this));
     this.router.get(
       "/:userId",
       validateParams(userByIdSchema),

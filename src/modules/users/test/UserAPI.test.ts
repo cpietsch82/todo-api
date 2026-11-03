@@ -23,10 +23,10 @@ describe("UserAPI", () => {
   // GET /api/users
   // ---------------------------------------------------------------------------
   describe("GET /api/users", () => {
-    it("should return the list containing the current user", async () => {
+    it("should return the list containing the current user for an admin", async () => {
       const response = await request(server)
         .get("/api/users")
-        .set(await createAuthHeader(testUser));
+        .set(await createAuthHeader(testUser, { role: "admin" }));
 
       expect(response.status).toBe(200);
       expect(response.body).toBeInstanceOf(Array);
@@ -34,8 +34,8 @@ describe("UserAPI", () => {
       expect(response.body[0].userId).toBe(testUser.userId);
     });
 
-    it("should return all existing users", async () => {
-      const authHeader = await createAuthHeader(testUser);
+    it("should return all existing users for an admin", async () => {
+      const authHeader = await createAuthHeader(testUser, { role: "admin" });
 
       await generateUser({ email: "second@test.com", username: "seconduser" });
 
@@ -46,6 +46,24 @@ describe("UserAPI", () => {
       expect(response.status).toBe(200);
       expect(response.body).toBeInstanceOf(Array);
       expect(response.body).toHaveLength(2);
+    });
+
+    it("should return 403 for a normal user and not expose other users", async () => {
+      await generateUser({ email: "second@test.com", username: "seconduser" });
+
+      const response = await request(server)
+        .get("/api/users")
+        .set(await createAuthHeader(testUser));
+
+      expect(response.status).toBe(403);
+      expect(response.body).not.toBeInstanceOf(Array);
+      expect(response.text).not.toContain("second@test.com");
+    });
+
+    it("should return 401 without a token", async () => {
+      const response = await request(server).get("/api/users");
+
+      expect(response.status).toBe(401);
     });
   });
 
