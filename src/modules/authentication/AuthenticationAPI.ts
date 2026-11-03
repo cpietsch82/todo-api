@@ -10,13 +10,13 @@ import { requireAuthentication } from "@/middleware/permissions";
 
 export class AuthenticationAPI extends APIModule {
   public static instance: AuthenticationAPI;
-  protected service: AuthenticationService;
+  protected authenticationService: AuthenticationService;
   protected tokenService: TokenService;
 
   constructor() {
     super("authentication.api", "API Module for user authentication operations", "/auth", true);
 
-    this.service = new AuthenticationService();
+    this.authenticationService = new AuthenticationService();
     if (!AuthenticationAPI.instance) AuthenticationAPI.instance = this;
     this.tokenService = new TokenService();
 
@@ -48,7 +48,7 @@ export class AuthenticationAPI extends APIModule {
    */
   private async register(req: TypedRequestBody<RegisterBody>, res: Response) {
     const { email, username, password, firstName, lastName } = req.body;
-    const { user, tokenPair } = await this.service.register(email, username, password, firstName, lastName);
+    const { user, tokenPair } = await this.authenticationService.register(email, username, password, firstName, lastName);
 
     const { accessToken, refreshToken } = tokenPair;
     res.status(201).json({ message: "User created", user, accessToken, refreshToken });
@@ -60,7 +60,7 @@ export class AuthenticationAPI extends APIModule {
   private async login(req: TypedRequestBody<LoginBody>, res: Response) {
     const { email, password } = req.body;
 
-    const { accessToken, refreshToken } = await this.service.login(email, password);
+    const { accessToken, refreshToken } = await this.authenticationService.login(email, password);
 
     res.status(201).json({ accessToken, refreshToken });
   }
@@ -69,14 +69,14 @@ export class AuthenticationAPI extends APIModule {
    * Refresh token
    */
   private async refresh(req: TypedRequestBody<RefreshBody>, res: Response) {
-    const { refreshToken } = req.body; // as { refreshToken?: string };
+    const { refreshToken } = req.body;
 
     if (!refreshToken) {
       return res.status(400).json({ error: "refreshToken is required" });
     }
 
     try {
-      const tokenPair = await this.service.rotateRefreshToken(refreshToken);
+      const tokenPair = await this.authenticationService.rotateRefreshToken(refreshToken);
       res.json(tokenPair);
     } catch (err: Error | unknown) {
       res.status(401).json({ error: err instanceof Error ? err.message : "Unknown error" });
@@ -88,7 +88,7 @@ export class AuthenticationAPI extends APIModule {
    */
   private async logout(req: TypedRequestBody<RefreshBody>, res: Response) {
     const { refreshToken } = req.body;
-    if (refreshToken) await this.service.revokeRefreshToken(refreshToken);
+    if (refreshToken) await this.authenticationService.revokeRefreshToken(refreshToken);
     res.json({ message: "Logged out successfully" });
   }
 }
