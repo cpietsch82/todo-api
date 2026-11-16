@@ -107,8 +107,8 @@ export class AuthenticationService extends BaseModule {
 
       return tokenPair;
     } catch (error) {
-      // all reasons (unknown, expired, deleted user) look the same to the client
-      const knownReasons = ["REFRESH_TOKEN_INVALID", "REFRESH_TOKEN_EXPIRED", "UNKNOWN_USER"];
+      // all reasons (unknown, expired, reused, deleted user) look the same to the client
+      const knownReasons = ["REFRESH_TOKEN_INVALID", "REFRESH_TOKEN_EXPIRED", "REFRESH_TOKEN_REUSED", "UNKNOWN_USER"];
       if (error instanceof Error && knownReasons.includes(error.message)) {
         throw HttpError.unauthorized("Invalid refresh token", error);
       }

@@ -50,6 +50,13 @@
       "when": 1793653189375,
       "tag": "0006_add_users_list_permission",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1793653190375,
+      "tag": "0007_refresh_token_families",
+      "breakpoints": true
     }
   ]
 }

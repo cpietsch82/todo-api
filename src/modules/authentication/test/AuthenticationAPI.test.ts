@@ -3,6 +3,10 @@ import request from "supertest";
 import type { Express } from "express";
 import { AuthenticationAPI } from "../AuthenticationAPI";
 import { getTestApp } from "@tests/integration.setup";
+import crypto from "node:crypto";
+import { eq } from "drizzle-orm";
+import { db } from "@/db";
+import { refreshTokens } from "../schema/authentication.schema";
 
 const VALID_REGISTER_PAYLOAD = {
   email: "john.doe@example.com",
@@ -280,6 +284,31 @@ describe("AuthAPI", () => {
 
       expect(replayResponse.status).toBe(401);
       expect(replayResponse.text).toBe("Invalid refresh token");
+    });
+
+    it("should revoke the whole login when a rotated refreshToken is used again later", async () => {
+      const registerResponse = await request(server).post("/api/auth/register").send(VALID_REGISTER_PAYLOAD);
+      const original = registerResponse.body.refreshToken;
+
+      const refreshed = await request(server).post("/api/auth/refresh").send({ refreshToken: original });
+      expect(refreshed.status).toBe(200);
+
+      // pretend the original token was rotated a while ago, so the reuse is no parallel request anymore
+      await db
+        .update(refreshTokens)
+        .set({ usedAt: new Date(Date.now() - 60_000) })
+        .where(eq(refreshTokens.tokenHash, crypto.createHash("sha256").update(original).digest("hex")));
+
+      const reused = await request(server).post("/api/auth/refresh").send({ refreshToken: original });
+      const newOneAfterwards = await request(server)
+        .post("/api/auth/refresh")
+        .send({ refreshToken: refreshed.body.refreshToken });
+
+      // the client only learns that the token is invalid, not that a theft was suspected
+      expect(reused.status).toBe(401);
+      expect(reused.text).toBe("Invalid refresh token");
+      expect(newOneAfterwards.status).toBe(401);
+      expect(newOneAfterwards.text).toBe("Invalid refresh token");
     });
 
     it("should return 400 when refreshToken is missing from the body", async () => {

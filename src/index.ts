@@ -4,6 +4,7 @@ import { AuthenticationAPI } from "@/modules/authentication/AuthenticationAPI";
 import { UserAPI } from "./modules/users/UserAPI";
 import { AdminAPI } from "./modules/admin/AdminAPI";
 import { waitForDatabase } from "@/db";
+import { startRefreshTokenCleanup } from "@/modules/authentication/refreshTokenCleanup";
 import env from "../env";
 import { logger } from "@/utils/logger";
 
@@ -20,10 +21,12 @@ async function bootstrap() {
   new UserAPI();
   new AdminAPI();
   expressAPI.listen();
+  const stopRefreshTokenCleanup = startRefreshTokenCleanup();
 
   // graceful shutdown
   const shutdown = async (signal: string) => {
     console.log(`\n${signal} received, shutting down gracefully...`);
+    stopRefreshTokenCleanup();
     await expressAPI.close();
     process.exit(0);
   };

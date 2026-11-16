@@ -20,7 +20,9 @@ with persistent refresh tokens and role/permission based authorization.
 **Authentication & Authorization**
 - **Jose** - signing and verifying JWT access tokens (HS256)
 - **bcrypt** - password hashing
-- Opaque **refresh tokens**, stored hashed (SHA-256) in the `refresh_tokens` table and rotated on every use
+- Opaque **refresh tokens**, stored hashed (SHA-256) in the `refresh_tokens` table and rotated on every use.
+  Rotated tokens are marked as used; presenting one again after a short grace period revokes the whole login
+  (token family). An hourly job removes expired tokens and used ones older than 24 hours.
 - Role/permission based access control (`user`, `admin`) stored in the database
 
 **Security & Middleware**
@@ -62,6 +64,7 @@ Validated at startup in `env.ts` (the process exits when something is missing or
 | `ACCESS_TOKEN_TTL` | Lifetime of the access token, e.g. `15m` |
 | `REFRESH_TOKEN_TTL` / `REFRESH_TOKEN_TTL_MS` | Lifetime of the refresh token (`REFRESH_TOKEN_TTL_MS` is used) |
 | `BCRYPT_SALT_ROUNDS` | Cost factor for bcrypt (min. 8) |
+| `REFRESH_TOKEN_MAX_PER_USER` | Maximum number of active refresh tokens (logins on different devices) per user, default `6`; the oldest are removed |
 | `TRUST_PROXY` | Number of reverse proxies in front of the API (default `0`). Needed so the rate limits use the real client IP; do not set it without a proxy |
 | `LOGIN_RATE_LIMIT_MAX` / `LOGIN_RATE_LIMIT_WINDOW_MS` | Failed login attempts per IP within the window (default `10` per 15 minutes) |
 | `REGISTER_RATE_LIMIT_MAX` / `REGISTER_RATE_LIMIT_WINDOW_MS` | Registrations per IP within the window (default `5` per hour) |
@@ -163,7 +166,7 @@ todo-api/
 │   │   │   ├── APIModule.ts        # Base class for modules that expose Express routes
 │   │   │   └── StorageModule.ts    # Generic base for database backed modules
 │   │   ├── express/                # ExpressAPI (app setup, routing, response helpers), VersionService
-│   │   ├── authentication/         # Register, login, JWT and persistent refresh tokens
+│   │   ├── authentication/         # Register, login, JWT, persistent refresh tokens and their cleanup job
 │   │   ├── authorization/          # Roles, permissions and their resolution per user
 │   │   ├── admin/                  # Admin API (guarded by admin:all, no routes yet)
 │   │   ├── users/
