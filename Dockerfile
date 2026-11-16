@@ -30,6 +30,9 @@ COPY --from=builder /app/drizzle ./drizzle
 COPY entrypoint.sh ./entrypoint.sh
 RUN chmod +x ./entrypoint.sh
 
+# directory for the optional log file (LOG_FILE), mount a volume here to keep the logs outside of the container
+RUN mkdir -p /app/logs && chown node:node /app/logs
+
 # the app does not need root rights, the files stay owned by root and are therefore read-only for the app
 USER node
 

@@ -9,7 +9,7 @@ with persistent refresh tokens and role/permission based authorization.
 - **Node.js 24** (see `.nvmrc`) / **TypeScript** - type-safe JavaScript
 - **Express 5** - web framework
 - **Zod** - request validation (body and params) and type inference
-- **Pino / pino-http** - structured logging (`pino-pretty` in development)
+- **Pino / pino-http** - structured logging (`pino-pretty` in development, `pino-roll` for rotated log files)
 
 **Database**
 - **PostgreSQL 16** - database
@@ -59,6 +59,7 @@ Validated at startup in `env.ts` (the process exits when something is missing or
 | `PORT` | Port of the API (default `3000`) |
 | `DATABASE_URL` | Must start with `postgresql://` (not needed for tests) |
 | `ALLOWED_ORIGINS` | Comma separated list of allowed CORS origins |
+| `LOG_FILE` | Optional path of a log file. The logs are written there in addition to stdout, rotated daily or at 10 MB with the newest 14 files kept. The compose file sets `/app/logs/api.log` (volume `api_logs`) |
 | `LOG_LEVEL` | `trace`, `debug`, `info`, `warn`, `error` or `fatal` |
 | `ACCESS_TOKEN_SECRET` / `REFRESH_TOKEN_SECRET` | Secrets for the tokens |
 | `ACCESS_TOKEN_TTL` | Lifetime of the access token, e.g. `15m` |
@@ -118,6 +119,18 @@ Permissions (`todos:read`, `users:delete`, ...) are defined in `src/modules/auth
   On a server open it through an SSH tunnel, e.g. `ssh -L 8080:127.0.0.1:8080 user@nas`, then visit `http://localhost:8080`.
 - **API container:** runs as the unprivileged user `node`, without Linux capabilities and with `no-new-privileges`.
   The image has a `HEALTHCHECK` on `/api/health`, so `docker ps` shows whether the API is healthy.
+
+### Logs
+
+The API always logs to stdout (`docker compose logs -f api`). If `LOG_FILE` is set (the compose file sets
+`/app/logs/api.log`), the logs are also written to a rotated file: `api.log` becomes `api.<date>.<number>.log`,
+a new file is started every day or at 10 MB, the newest 14 files are kept and `current.log` always points to the active
+one. Older files are removed, also those of earlier container runs, so the log directory must only contain these logs.
+
+In Docker the directory `/app/logs` is the volume `api_logs`, so the files stay available after a restart or update.
+On the NAS the volume lies below the docker volume directory (e.g. `.../volumes/todo-api_api_logs/_data`), or read it with
+`docker run --rm -v todo-api_api_logs:/logs alpine tail -n 100 /logs/current.log`. If the file cannot be written, the API
+starts anyway and only logs to stdout. Secrets and the values of database queries are removed from the logs.
 
 ## Error Handling
 

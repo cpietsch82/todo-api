@@ -26,6 +26,8 @@ export const envSchema = z.object({
   APP_STAGE: z.enum(["dev", "test", "production"]).default("dev"),
   PORT: z.coerce.number().positive().default(3000),
   ALLOWED_ORIGINS: z.string().default(""),
+  // optional: additionally write the logs to this file (e.g. on a docker volume), they always go to stdout as well
+  LOG_FILE: z.string().min(1).optional(),
   LOG_LEVEL: z.enum(["info", "warn", "error", "debug", "trace", "fatal"]).default("info"),
   DATABASE_URL: !isTesting ? z.string().startsWith('postgresql://') : z.string().default("YOUDONTKNOWME"),
   BCRYPT_SALT_ROUNDS: z.coerce.number().positive().min(8).default(10),
