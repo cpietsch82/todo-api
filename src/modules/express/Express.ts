@@ -5,9 +5,8 @@ import env from "../../../env";
 import http from "http";
 import helmet from "helmet";
 import cors from "cors";
-import rateLimit from "express-rate-limit";
+import { createApiRateLimiter } from "@/middleware/rateLimit";
 import compression from "compression";
-import cookieParser from "cookie-parser";
 import { randomUUID } from "crypto";
 import { httpLogger } from "@/middleware/httpLogger";
 import { createAuthMiddleware } from "@/middleware/authenticateToken";
@@ -27,6 +26,10 @@ declare global {
       respondError: (message: string, status?: number, returnMessage?: boolean) => Response;
       respondAuthorizationRequired: (message?: string, returnMessage?: boolean) => Response;
       respondAuthorizationInsufficient: (message?: string, returnMessage?: boolean) => Response;
+      respondBadRequest: (message?: string, returnMessage?: boolean) => Response;
+      respondConflict: (message?: string, returnMessage?: boolean) => Response;
+      respondTooManyRequests: (message?: string, returnMessage?: boolean) => Response;
+      respondInternalServerError: (message?: string, returnMessage?: boolean) => Response;
       respondMissingParameter: (param: string, status?: number, returnMessage?: boolean) => Response;
       respondMissingBody: (status?: number, returnMessage?: boolean) => Response;
       respondInvalidParameter: (
@@ -40,6 +43,17 @@ declare global {
       respondNotFound: (message?: string) => Response;
     }
   }
+}
+
+// maximum size of a request body, bigger bodies are answered with 413
+export const BODY_LIMIT = "100kb";
+
+/**
+ * Tells express how many reverse proxies are in front of the API, so `req.ip` (and with it the rate limit)
+ * uses the client IP from X-Forwarded-For. Never use `true` here: then the header can be forged by any client.
+ */
+export function configureTrustProxy(app: Express, trustedProxies: number): void {
+  app.set("trust proxy", trustedProxies > 0 ? trustedProxies : false);
 }
 
 export type HTTPMethod = "get" | "post" | "put" | "delete" | "patch" | "options" | "head" | "all";
@@ -136,7 +150,6 @@ export class ExpressAPI extends BaseModule {
     this.versionService = new VersionService();
 
     this.setupMiddleware();
-    this.setupErrorHandling();
 
     if (!ExpressAPI.instance) ExpressAPI.instance = this;
 
@@ -144,16 +157,10 @@ export class ExpressAPI extends BaseModule {
   }
 
   private setupMiddleware(): void {
-    this.app.use(express.json({ limit: "4mb" }));
-    // this.router.use((err, req, res, next) => res.respondError("Body is malformed JSON: " + err.message, 400, true))
-    this.app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+    configureTrustProxy(this.app, env.TRUST_PROXY);
 
-    const authenticate = createAuthMiddleware(this.tokenService);
-    this.router.use(authenticate);
-    this.router.use(this.preAuthRouter);
-    this.router.use(requireAuthentication());
-    this.router.use(additionalRequestDetailsForTesting);
-
+    // The order matters: everything that rejects or throttles a request has to come before the body is parsed,
+    // so rejected requests cannot make the server parse big bodies.
     // security headers
     this.app.use(helmet());
     // CORS - cross origin resource sharing
@@ -165,25 +172,6 @@ export class ExpressAPI extends BaseModule {
         allowedHeaders: ["Content-Type", "Authorization"],
       }),
     );
-    // request logging
-    this.app.use(httpLogger);
-    // rate limiting
-    const limiter = rateLimit({
-      windowMs: env.RATE_LIMIT_WINDOW_MS,
-      max: env.RATE_LIMIT_PER_IP,
-      message: "Too many requests from this IP, please try again later.",
-      standardHeaders: true,
-      legacyHeaders: false,
-      handler: (req, res) => {
-        this.logger.warn({ ip: req.ip, path: req.path }, "Rate limit exceeded");
-        res.respondError("Too many requests from this IP, please try again later.", 429);
-      },
-    });
-    this.app.use("/api/", limiter);
-    // response compression
-    this.app.use(compression());
-    // cookie parser
-    this.app.use(cookieParser());
     // request ID for tracing
     this.app.use((req: Request, res: Response, next: NextFunction) => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -192,6 +180,21 @@ export class ExpressAPI extends BaseModule {
       res.setHeader("X-Request-ID", (req as any).id);
       next();
     });
+    // request logging (before the rate limit, so rejected requests are logged as well)
+    this.app.use(httpLogger);
+    // rate limiting
+    this.app.use("/api/", createApiRateLimiter());
+    // response compression
+    this.app.use(compression());
+    // body parsing, only json is accepted
+    this.app.use(express.json({ limit: BODY_LIMIT }));
+
+    const authenticate = createAuthMiddleware(this.tokenService);
+    this.router.use(authenticate);
+    this.router.use(this.preAuthRouter);
+    this.router.use(requireAuthentication());
+    this.router.use(globalErrorHandler("Unhandled auth verification"));
+    this.router.use(additionalRequestDetailsForTesting);
 
     // use api sub route per default
     this.app.use("/api", this.router);
@@ -223,16 +226,14 @@ export class ExpressAPI extends BaseModule {
         });
       }
     });
-  }
 
-  private setupErrorHandling(): void {
     // 404 Handler
     this.app.use((req: Request, res: Response) => {
       this.logger.warn({ path: req.path, method: req.method }, "Route not found");
       res.respondNotFound(`Route ${req.path} not found.`);
     });
 
-    this.app.use(globalErrorHandler("Unhandled Error"));
+    this.app.use(globalErrorHandler("Unhandled error"));
   }
 
   // for later https availability
@@ -247,10 +248,6 @@ export class ExpressAPI extends BaseModule {
   //   };
   // }
 
-  // getRouter() {
-  //   return this.router;
-  // }
-
   /**
    * Added predefined response handlers to the response object from express
    */
@@ -261,6 +258,14 @@ export class ExpressAPI extends BaseModule {
       res.respondError(message, 401, returnMessage);
     res.respondAuthorizationInsufficient = (message = "Insufficient Permissions!", returnMessage = false) =>
       res.respondError(message, 403, returnMessage);
+    // the messages of the following helpers are always written by us, so they are sent by default
+    res.respondBadRequest = (message = "Bad request", returnMessage = true) =>
+      res.respondError(message, 400, returnMessage);
+    res.respondConflict = (message = "Conflict", returnMessage = true) => res.respondError(message, 409, returnMessage);
+    res.respondTooManyRequests = (message = "Too many requests", returnMessage = true) =>
+      res.respondError(message, 429, returnMessage);
+    res.respondInternalServerError = (message = "Internal Server Error", returnMessage = true) =>
+      res.respondError(message, 500, returnMessage);
     res.respondMissingParameter = (param, status = 400, returnMessage = true) =>
       res.respondError(`missing parameter ${param}`, status, returnMessage);
     res.respondMissingBody = (status = 400, returnMessage = true) =>
@@ -283,10 +288,7 @@ export class ExpressAPI extends BaseModule {
       throw new Error(
         "don't mix up your parameters please (this is otherwise reported as an express deprecation warning, which is hard to locate the origin)!",
       );
-    // if (this.debug) console.warn(ExpressAPI.makeRequestLabel(req) + " returning " + status + " because " + message);
     res.status(status);
-    // if (this.debug || returnMessage === true || req.hasPermission?.("express.see.hidden.errors")) res.send(message);
-    // res.end();
     if (returnMessage) res.send(message);
     return res.end();
   }
@@ -324,13 +326,6 @@ export class ExpressAPI extends BaseModule {
 
     const router = express.Router();
     this.useWithPaths(actualParentRouter, actualPaths, router);
-    // if (actualPaths.length > 0) {
-    //   // because typescript is sometimes to strict and cannot calculate how many paths exists during compile time
-    //   // so the only solution here is to use the apply function to avoid typescript parsing
-    //   (actualParentRouter.use as Function).apply(actualParentRouter, [...actualPaths, router]);
-    // } else {
-    //   actualParentRouter.use(router);
-    // }
 
     const subRouterRouter = express.Router();
     router.use(subRouterRouter);
@@ -339,13 +334,6 @@ export class ExpressAPI extends BaseModule {
     const createMethodHandler = (method: HTTPMethod) => {
       return (pathOrHandler: string | RouteHandler, ...handlers: RouteHandler[]) => {
         this.applyHandlers(method, router, [pathOrHandler, ...handlers] as RequestHandler[]);
-        // if (typeof pathOrHandler === "string") {
-        //   // path was passed: router.get('/path', handler1, handler2)
-        //   this.applyHandlers(method, router, [pathOrHandler, ...handlers] as RequestHandler[]);
-        // } else {
-        //   // only handler: router.get(handler1, handler2)
-        //   this.applyHandlers(method, router, [pathOrHandler, ...handlers] as RequestHandler[]);
-        // }
       };
     };
 
@@ -354,11 +342,6 @@ export class ExpressAPI extends BaseModule {
 
       use: (pathOrHandler: string | RouteHandler, ...handlers: RouteHandler[]) => {
         router.use(...([pathOrHandler, ...handlers] as Parameters<typeof router.use>));
-        // if (typeof pathOrHandler === "string") {
-        //   router.use(...([pathOrHandler, ...handlers] as Parameters<typeof router.use>));
-        // } else {
-        //   router.use(...([pathOrHandler, ...handlers] as Parameters<typeof router.use>));
-        // }
       },
 
       all: createMethodHandler("all"),

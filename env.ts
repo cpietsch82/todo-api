@@ -7,9 +7,7 @@ import { z } from "zod";
 
 process.env.APP_STAGE = process.env.APP_STAGE || "dev";
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-const isProduction = process.env.APP_STAGE === "production";
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
+// const isProduction = process.env.APP_STAGE === "production";
 const isDevelopment = process.env.APP_STAGE === "dev";
 const isTesting = process.env.APP_STAGE === "test";
 
@@ -17,28 +15,44 @@ if (isDevelopment) {
   dotenv.config({ quiet: true });
 } else if (isTesting) {
   dotenv.config({ quiet: true, path: "./.env.test" });
+} else {
+  process.env.NODE_ENV = "production"
 }
 
 // for testing the database url is not necessary,
 // because we're using an in-memory database
-const envSchema = z.object({
+export const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   APP_STAGE: z.enum(["dev", "test", "production"]).default("dev"),
   PORT: z.coerce.number().positive().default(3000),
-  ALLOWED_ORIGINS: z.string(),
-  LOG_LEVEL: z.enum(["info", "warn", "error", "debug", "trace", "fatal"]),
+  ALLOWED_ORIGINS: z.string().default(""),
+  LOG_LEVEL: z.enum(["info", "warn", "error", "debug", "trace", "fatal"]).default("info"),
   DATABASE_URL: !isTesting ? z.string().startsWith('postgresql://') : z.string().default("YOUDONTKNOWME"),
-  BCRYPT_SALT_ROUNDS: z.coerce.number().positive().min(8),
-  ACCESS_TOKEN_SECRET: z.string(),
-  REFRESH_TOKEN_SECRET: z.string(),
+  BCRYPT_SALT_ROUNDS: z.coerce.number().positive().min(8).default(10),
+  ACCESS_TOKEN_SECRET: isTesting ? z.string().default("myTestSecret") : z.string(),
+  REFRESH_TOKEN_SECRET: isTesting ? z.string().default("myTestRefreshSecret") : z.string(),
   ACCESS_TOKEN_TTL: z.string().default("15m"),
   REFRESH_TOKEN_TTL: z.string().default("7d"),
   REFRESH_TOKEN_TTL_MS: z.coerce
     .number()
     .positive()
     .default(7 * 24 * 60 * 60 * 1000),
-  RATE_LIMIT_PER_IP: z.coerce.number().positive().min(100),
+  RATE_LIMIT_PER_IP: z.coerce.number().positive().min(100).default(1000),
   RATE_LIMIT_WINDOW_MS: z.coerce.number().positive().default(900000), // 15 minutes
+  // maximum number of active refresh tokens (= logins on different devices) per user, the oldest are removed
+  REFRESH_TOKEN_MAX_PER_USER: z.coerce.number().int().positive().default(6),
+  // number of reverse proxies in front of the API (0 = none). Needed for the correct client IP of the rate limits.
+  TRUST_PROXY: z.coerce.number().int().min(0).default(0),
+  // stricter limits for the authentication routes (per IP)
+  LOGIN_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(10), // failed attempts
+  LOGIN_RATE_LIMIT_WINDOW_MS: z.coerce.number().positive().default(15 * 60 * 1000),
+  REGISTER_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(5),
+  REGISTER_RATE_LIMIT_WINDOW_MS: z.coerce.number().positive().default(60 * 60 * 1000),
+  // developer flag: send the complete error (message and stack) in the response instead of a generic text
+  EXPOSE_ERROR_DETAILS: z.stringbool().default(false),
+}).refine((config) => !(config.APP_STAGE === "production" && config.EXPOSE_ERROR_DETAILS), {
+  message: "EXPOSE_ERROR_DETAILS must not be enabled in production",
+  path: ["EXPOSE_ERROR_DETAILS"],
 });
 
 export type Env = z.infer<typeof envSchema>;
