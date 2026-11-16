@@ -42,7 +42,7 @@ with persistent refresh tokens and role/permission based authorization.
 nvm use                # Node 24
 npm ci
 cp .env.example .env   # and fill in all variables listed below
-npm run docker:up      # starts Postgres (and Adminer) via Docker Compose
+npm run docker:up      # starts the Docker Compose services including Adminer (profile "dev")
 npm run db:migrate     # applies the migrations from ./drizzle
 npm run dev            # starts the API with nodemon
 ```
@@ -104,6 +104,17 @@ All routes live under `/api`. Everything except the routes marked as public requ
 
 Permissions (`todos:read`, `users:delete`, ...) are defined in `src/modules/authorization/permissions.ts`;
 `admin:all` grants every permission.
+
+## Docker
+
+- **Ports:** Postgres (`5432`) and Adminer (`8080`) are only bound to `127.0.0.1`, the API (`3000`) is reachable from
+  the network. The API reaches Postgres through the compose network, the host port is only for local tools such as
+  `npm run dev` or `npm run db:studio`.
+- **Adminer** belongs to the compose profile `dev` and is only started on demand:
+  `docker compose --profile dev up -d adminer` (the `npm run docker:*` scripts include the profile).
+  On a server open it through an SSH tunnel, e.g. `ssh -L 8080:127.0.0.1:8080 user@nas`, then visit `http://localhost:8080`.
+- **API container:** runs as the unprivileged user `node`, without Linux capabilities and with `no-new-privileges`.
+  The image has a `HEALTHCHECK` on `/api/health`, so `docker ps` shows whether the API is healthy.
 
 ## Error Handling
 

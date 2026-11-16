@@ -6,7 +6,8 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
+      # only reachable from this machine (e.g. for npm run dev), the api reaches postgres via the compose network
+      - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
@@ -15,10 +16,13 @@ services:
     restart: unless-stopped
 
   adminer:
-    image: adminer:latest
+    image: adminer:4
     container_name: todo-adminer
+    # only started on demand: docker compose --profile dev up -d
+    profiles: ["dev"]
     ports:
-      - "8080:8080"
+      # only reachable from the machine it runs on, use an SSH tunnel to reach it on the NAS
+      - "127.0.0.1:8080:8080"
     depends_on:
       postgres:
         condition: service_healthy
@@ -28,6 +32,10 @@ services:
     image: todo-api:latest
     env_file:
       - .env.api
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     ports:
       - "3000:3000"
     depends_on:
