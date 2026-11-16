@@ -39,6 +39,13 @@ export const envSchema = z.object({
     .default(7 * 24 * 60 * 60 * 1000),
   RATE_LIMIT_PER_IP: z.coerce.number().positive().min(100).default(1000),
   RATE_LIMIT_WINDOW_MS: z.coerce.number().positive().default(900000), // 15 minutes
+  // number of reverse proxies in front of the API (0 = none). Needed for the correct client IP of the rate limits.
+  TRUST_PROXY: z.coerce.number().int().min(0).default(0),
+  // stricter limits for the authentication routes (per IP)
+  LOGIN_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(10), // failed attempts
+  LOGIN_RATE_LIMIT_WINDOW_MS: z.coerce.number().positive().default(15 * 60 * 1000),
+  REGISTER_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(5),
+  REGISTER_RATE_LIMIT_WINDOW_MS: z.coerce.number().positive().default(60 * 60 * 1000),
   // developer flag: send the complete error (message and stack) in the response instead of a generic text
   EXPOSE_ERROR_DETAILS: z.stringbool().default(false),
 }).refine((config) => !(config.APP_STAGE === "production" && config.EXPOSE_ERROR_DETAILS), {

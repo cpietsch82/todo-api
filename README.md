@@ -62,6 +62,9 @@ Validated at startup in `env.ts` (the process exits when something is missing or
 | `ACCESS_TOKEN_TTL` | Lifetime of the access token, e.g. `15m` |
 | `REFRESH_TOKEN_TTL` / `REFRESH_TOKEN_TTL_MS` | Lifetime of the refresh token (`REFRESH_TOKEN_TTL_MS` is used) |
 | `BCRYPT_SALT_ROUNDS` | Cost factor for bcrypt (min. 8) |
+| `TRUST_PROXY` | Number of reverse proxies in front of the API (default `0`). Needed so the rate limits use the real client IP; do not set it without a proxy |
+| `LOGIN_RATE_LIMIT_MAX` / `LOGIN_RATE_LIMIT_WINDOW_MS` | Failed login attempts per IP within the window (default `10` per 15 minutes) |
+| `REGISTER_RATE_LIMIT_MAX` / `REGISTER_RATE_LIMIT_WINDOW_MS` | Registrations per IP within the window (default `5` per hour) |
 | `EXPOSE_ERROR_DETAILS` | Developer flag (default `false`): responses contain the complete error message and stack trace of unexpected errors. The API refuses to start with it when `APP_STAGE=production` |
 | `RATE_LIMIT_PER_IP` / `RATE_LIMIT_WINDOW_MS` | Requests per IP (min. 100) within the time window |
 
@@ -116,6 +119,16 @@ of `ExpressAPI` (`respondBadRequest`, `respondConflict`, `respondAuthorizationRe
   `refreshToken`, `authorization`, ...) are censored when they are logged as part of an object.
 - For development set `EXPOSE_ERROR_DETAILS=true` to receive the complete message and stack trace in the response.
 
+## Request Limits
+
+- The middleware order in `ExpressAPI` is: security headers, CORS, request id, logging, **rate limit**, compression,
+  **body parsing**. Throttled requests are rejected before their body is parsed.
+- Only JSON bodies are accepted, bigger than 100 kb are answered with `413`.
+- `/api` has a general limit per IP (`RATE_LIMIT_PER_IP`), `/auth/login` (failed attempts only) and `/auth/register`
+  have stricter limits. All counters are held in memory, so they are valid per instance and reset on restart.
+- Behind a reverse proxy set `TRUST_PROXY` to the number of proxies (usually `1`), otherwise all clients share the IP of
+  the proxy. Never use it without a proxy: the `X-Forwarded-For` header could be forged to bypass the limits.
+
 ## Project Structure
 
 ```
@@ -130,6 +143,7 @@ todo-api/
 │   │   ├── authenticateToken.ts    # Reads and verifies the access token
 │   │   ├── permissions.ts          # requirePermissions, requireSelf and ownership checks
 │   │   ├── validate.ts             # Zod validation of body and params
+│   │   ├── rateLimit.ts            # General and stricter auth rate limiters
 │   │   ├── globalErrorHandler.ts   # Error handler (status + message, error id for 5xx)
 │   │   └── httpLogger.ts           # Request logging
 │   ├── modules/

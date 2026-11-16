@@ -252,10 +252,26 @@ describe("ExpressAPI", () => {
       expect((await request(server).delete("/api/express-methods")).body).toEqual({ method: "delete" });
     });
 
-    it("should parse urlencoded bodies", async () => {
+    it("should not parse form bodies, only json is accepted", async () => {
       const response = await request(server).post("/api/express-methods").type("form").send("name=todo&done=false");
 
-      expect(response.body.body).toEqual({ name: "todo", done: "false" });
+      expect(response.body.body).toBeUndefined();
+    });
+
+    it("should return 413 for a body that exceeds the size limit", async () => {
+      const response = await request(server)
+        .post("/api/express-methods")
+        .send({ payload: "x".repeat(200 * 1024) });
+
+      expect(response.status).toBe(413);
+    });
+
+    it("should accept a body below the size limit", async () => {
+      const response = await request(server)
+        .post("/api/express-methods")
+        .send({ payload: "x".repeat(50 * 1024) });
+
+      expect(response.status).toBe(201);
     });
 
     it("should pass query parameters to the handler", async () => {
