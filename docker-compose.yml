@@ -32,6 +32,12 @@ services:
     image: todo-api:latest
     env_file:
       - .env.api
+    environment:
+      # the logs are also written to the volume below (and always to stdout, see docker compose logs api).
+      # The files are rotated daily or at 10 MB, the newest 14 are kept.
+      LOG_FILE: /app/logs/api.log
+    volumes:
+      - api_logs:/app/logs
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -45,3 +51,8 @@ services:
 
 volumes:
   postgres_data:
+  # log files of the api (api.<date>.<number>.log, current.log points to the active one), on the NAS found under
+  # the docker volume directory of this project (api_logs).
+  # To read them in a normal folder instead, replace the volume mount of the api by "./logs:/app/logs" and
+  # run "chown 1000:1000 logs" once, because the api runs as the user node (uid 1000).
+  api_logs:

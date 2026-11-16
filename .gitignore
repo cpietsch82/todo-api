@@ -9,3 +9,4 @@ node_modules
 dist/
 
 TODOS.txt
+.DS_Store

@@ -1,5 +1,7 @@
 import env, { isDevEnv } from "../../env";
 import pino from "pino";
+import fs from "node:fs";
+import path from "node:path";
 
 const REDACTED = "[REDACTED]";
 
@@ -46,6 +48,88 @@ export function serializeError(error: unknown) {
   return serialized;
 }
 
+/**
+ * Checks that the log file can be written and creates its directory. Returns undefined (and tells so on stderr)
+ * when that is not possible, so a missing or read-only log volume never prevents the api from starting.
+ */
+export function resolveLogFile(logFile: string | undefined): string | undefined {
+  if (!logFile) return undefined;
+
+  try {
+    const directory = path.dirname(path.resolve(logFile));
+    fs.mkdirSync(directory, { recursive: true });
+    fs.accessSync(directory, fs.constants.W_OK);
+    return logFile;
+  } catch (error) {
+    process.stderr.write(
+      `LOG_FILE ${logFile} is not writable, logging to stdout only: ${error instanceof Error ? error.message : String(error)}\n`,
+    );
+    return undefined;
+  }
+}
+
+export interface LogRotationOptions {
+  /** maximum size of one log file before a new one is started, e.g. "10m" */
+  size: string;
+  /** how often a new log file is started at the latest */
+  frequency: "daily" | "hourly";
+  /** number of rotated files that are kept in addition to the active one */
+  count: number;
+}
+
+export const DEFAULT_LOG_ROTATION: LogRotationOptions = { size: "10m", frequency: "daily", count: 14 };
+
+const PRETTY_TARGET = {
+  target: "pino-pretty",
+  options: {
+    colorize: true,
+    translateTime: "HH:MM:ss Z",
+    ignore: "pid,hostname",
+  },
+};
+
+/**
+ * Target of the rotated log file: api.log becomes api.<date>.<number>.log, the symlink current.log always points to the
+ * active file. Old files are removed, also those of earlier runs, so the directory of the log file should be used for
+ * the logs only.
+ */
+export function buildFileTarget(logFile: string, rotation: LogRotationOptions = DEFAULT_LOG_ROTATION) {
+  return {
+    target: "pino-roll",
+    options: {
+      file: logFile,
+      mkdir: true,
+      dateFormat: "yyyy-MM-dd",
+      frequency: rotation.frequency,
+      size: rotation.size,
+      symlink: true,
+      limit: { count: rotation.count, removeOtherLogFiles: true },
+    },
+  };
+}
+
+/**
+ * Builds the destination of the logger. Without a log file production logs go straight to stdout (undefined = pino
+ * default), development uses pino-pretty. With a log file they go to the console and to the rotated file.
+ *
+ * A multistream is used instead of `transport.targets`, because pino does not allow the custom level formatter
+ * (INFO instead of 30) together with several transport targets.
+ */
+export function buildDestination(
+  logFile: string | undefined,
+  development: boolean,
+  rotation: LogRotationOptions = DEFAULT_LOG_ROTATION,
+): pino.DestinationStream | undefined {
+  const consoleStream = development ? pino.transport(PRETTY_TARGET) : undefined;
+  if (!logFile) return consoleStream;
+
+  // the level of the logger decides what is logged, so the streams must accept everything
+  return pino.multistream([
+    { level: "trace", stream: consoleStream ?? process.stdout },
+    { level: "trace", stream: pino.transport(buildFileTarget(logFile, rotation)) },
+  ]);
+}
+
 export const loggerOptions: pino.LoggerOptions = {
   level: env.LOG_LEVEL || "info",
   serializers: {
@@ -70,16 +154,6 @@ export const loggerOptions: pino.LoggerOptions = {
     ],
     censor: REDACTED,
   },
-  transport: isDevEnv()
-    ? {
-        target: "pino-pretty",
-        options: {
-          colorize: true,
-          translateTime: "HH:MM:ss Z",
-          ignore: "pid,hostname",
-        },
-      }
-    : undefined,
   formatters: {
     level: (label) => {
       return { level: label.toUpperCase() };
@@ -87,4 +161,4 @@ export const loggerOptions: pino.LoggerOptions = {
   },
 };
 
-export const logger = pino(loggerOptions);
+export const logger = pino(loggerOptions, buildDestination(resolveLogFile(env.LOG_FILE), isDevEnv()));
