@@ -6,7 +6,7 @@ import UserService from "../users/UserService";
 import { buildJwtClaims, type Permission } from "../authorization/permissions";
 import AuthorizationService from "../authorization/AuthorizationService";
 import { db } from "@/db";
-import { eq, lt } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, lt, or } from "drizzle-orm";
 import { refreshTokens } from "./schema/authentication.schema";
 
 export interface JwtPayload extends JWTPayload {
@@ -21,6 +21,12 @@ export interface TokenPair {
   accessToken: string;
   refreshToken: string;
 }
+
+// A rotated token that is presented again within this time is treated as a parallel request of the same client
+// (e.g. two tabs), not as theft.
+export const REFRESH_TOKEN_REUSE_GRACE_MS = 10_000;
+// Used tokens are kept this long to be able to detect their reuse, afterwards they are removed by the cleanup.
+export const USED_REFRESH_TOKEN_RETENTION_MS = 24 * 60 * 60 * 1000;
 
 class TokenService extends BaseModule {
   public static instance: TokenService;
@@ -58,24 +64,47 @@ class TokenService extends BaseModule {
       .sign(secretKey);
   }
 
-  async generateRefreshToken(id: string): Promise<string> {
+  /**
+   * Creates a new refresh token. Tokens which are created by a rotation pass the family id of the rotated token,
+   * a login starts a new family. Only the newest REFRESH_TOKEN_MAX_PER_USER unused tokens of a user are kept.
+   */
+  async generateRefreshToken(id: string, familyId?: string): Promise<string> {
     // Cryptographically random opaque token (not a JWT) – harder to forge,
     // easier to revoke without sharing secrets.
     const token = crypto.randomBytes(64).toString("hex");
 
-    await db.insert(refreshTokens).values({
-      userId: id,
-      tokenHash: this.hashToken(token),
-      expiresAt: new Date(Date.now() + env.REFRESH_TOKEN_TTL_MS),
+    await db.transaction(async (tx) => {
+      await tx.insert(refreshTokens).values({
+        userId: id,
+        familyId,
+        tokenHash: this.hashToken(token),
+        expiresAt: new Date(Date.now() + env.REFRESH_TOKEN_TTL_MS),
+      });
+
+      const surplus = await tx
+        .select({ refreshTokenId: refreshTokens.refreshTokenId })
+        .from(refreshTokens)
+        .where(and(eq(refreshTokens.userId, id), isNull(refreshTokens.usedAt)))
+        .orderBy(desc(refreshTokens.createdAt), desc(refreshTokens.refreshTokenId))
+        .offset(env.REFRESH_TOKEN_MAX_PER_USER);
+
+      if (surplus.length > 0) {
+        await tx.delete(refreshTokens).where(
+          inArray(
+            refreshTokens.refreshTokenId,
+            surplus.map((row) => row.refreshTokenId),
+          ),
+        );
+      }
     });
 
     return token;
   }
 
-  async generateTokenPair(payload: JwtPayload) {
+  async generateTokenPair(payload: JwtPayload, familyId?: string) {
     return {
       accessToken: await this.generateAccessToken(payload),
-      refreshToken: await this.generateRefreshToken(payload.id),
+      refreshToken: await this.generateRefreshToken(payload.id, familyId),
     };
   }
 
@@ -91,27 +120,53 @@ class TokenService extends BaseModule {
   }
 
   async rotateRefreshToken(incomingToken: string): Promise<{ tokenPair: TokenPair; id: string }> {
-    // Invalidate the used token immediately (rotation – prevents replay attacks).
-    // Delete and read happen in one statement, so a token can never be redeemed twice, even concurrently.
-    const [stored] = await db
-      .delete(refreshTokens)
-      .where(eq(refreshTokens.tokenHash, this.hashToken(incomingToken)))
+    const tokenHash = this.hashToken(incomingToken);
+
+    // Mark the token as used (rotation – prevents replay attacks). Claim and read happen in one statement,
+    // so a token can never be redeemed twice, even concurrently.
+    const [claimed] = await db
+      .update(refreshTokens)
+      .set({ usedAt: new Date() })
+      .where(and(eq(refreshTokens.tokenHash, tokenHash), isNull(refreshTokens.usedAt)))
       .returning();
 
-    if (!stored) {
-      throw new Error("REFRESH_TOKEN_INVALID");
+    if (!claimed) {
+      await this.handleUnclaimedToken(tokenHash);
     }
 
-    if (stored.expiresAt < new Date()) {
+    if (claimed.expiresAt < new Date()) {
+      await db.delete(refreshTokens).where(eq(refreshTokens.refreshTokenId, claimed.refreshTokenId));
       throw new Error("REFRESH_TOKEN_EXPIRED");
     }
 
-    const user = await this.userService.getUserById(stored.userId);
+    const user = await this.userService.getUserById(claimed.userId);
     if (!user) throw new Error("UNKNOWN_USER");
-    const authorization = await this.authorizationService.getAuthorizationForUser(stored.userId);
-    const tokenPair = await this.generateTokenPair(buildJwtClaims(user, authorization));
+    const authorization = await this.authorizationService.getAuthorizationForUser(claimed.userId);
+    const tokenPair = await this.generateTokenPair(buildJwtClaims(user, authorization), claimed.familyId);
 
-    return { tokenPair, id: stored.userId };
+    return { tokenPair, id: claimed.userId };
+  }
+
+  /**
+   * Decides why a token could not be claimed: it is unknown, expired, or it was already used.
+   * A token that is used again after the grace period was most likely stolen, so its whole family is revoked.
+   * Always throws.
+   */
+  private async handleUnclaimedToken(tokenHash: string): Promise<never> {
+    const [stored] = await db.select().from(refreshTokens).where(eq(refreshTokens.tokenHash, tokenHash)).limit(1);
+
+    if (!stored) throw new Error("REFRESH_TOKEN_INVALID");
+    if (stored.expiresAt < new Date()) throw new Error("REFRESH_TOKEN_EXPIRED");
+
+    const usedAgoMs = stored.usedAt ? Date.now() - stored.usedAt.getTime() : Infinity;
+    if (usedAgoMs <= REFRESH_TOKEN_REUSE_GRACE_MS) throw new Error("REFRESH_TOKEN_INVALID");
+
+    await db.delete(refreshTokens).where(eq(refreshTokens.familyId, stored.familyId));
+    this.logger.warn(
+      { userId: stored.userId, familyId: stored.familyId },
+      "Reuse of a rotated refresh token detected, all tokens of this login were revoked",
+    );
+    throw new Error("REFRESH_TOKEN_REUSED");
   }
 
   // ---------------------------------------------------------------------------
@@ -127,13 +182,19 @@ class TokenService extends BaseModule {
   }
 
   /**
-   * Removes all expired refresh tokens, e.g. to be called by a cleanup job.
+   * Removes all expired refresh tokens and used ones which are older than the retention time,
+   * e.g. to be called by a cleanup job.
    * @returns the number of removed tokens
    */
   async deleteExpiredRefreshTokens(): Promise<number> {
     const removed = await db
       .delete(refreshTokens)
-      .where(lt(refreshTokens.expiresAt, new Date()))
+      .where(
+        or(
+          lt(refreshTokens.expiresAt, new Date()),
+          lt(refreshTokens.usedAt, new Date(Date.now() - USED_REFRESH_TOKEN_RETENTION_MS)),
+        ),
+      )
       .returning({ refreshTokenId: refreshTokens.refreshTokenId });
 
     return removed.length;

@@ -21,6 +21,11 @@ describe("permissions", () => {
       expect(result).not.toContain("admin:all");
     });
 
+    it("should grant users:list only to the admin role", () => {
+      expect(getPermissionsForRole("user")).not.toContain("users:list");
+      expect(getPermissionsForRole("admin")).toContain("users:list");
+    });
+
     it("should return admin:all and all user permissions for the admin role", () => {
       const result = getPermissionsForRole("admin");
 

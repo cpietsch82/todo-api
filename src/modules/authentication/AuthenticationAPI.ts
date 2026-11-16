@@ -7,6 +7,7 @@ import { RegisterBody, registerSchema, loginSchema, LoginBody, refreshSchema, Re
 import TokenService from "./TokenService";
 import { createAuthMiddleware } from "@/middleware/authenticateToken";
 import { requireAuthentication } from "@/middleware/permissions";
+import { createLoginRateLimiter, createRegisterRateLimiter } from "@/middleware/rateLimit";
 
 export class AuthenticationAPI extends APIModule {
   public static instance: AuthenticationAPI;
@@ -28,8 +29,8 @@ export class AuthenticationAPI extends APIModule {
     // this.tokenService before it is assigned (super() runs initializeRoutes before
     // the constructor body sets this.tokenService).
     const authenticate = createAuthMiddleware(new TokenService());
-    this.router.post("/register", validateBody(registerSchema), this.register.bind(this));
-    this.router.post("/login", validateBody(loginSchema), this.login.bind(this));
+    this.router.post("/register", createRegisterRateLimiter(), validateBody(registerSchema), this.register.bind(this));
+    this.router.post("/login", createLoginRateLimiter(), validateBody(loginSchema), this.login.bind(this));
     this.router.post("/refresh", validateBody(refreshSchema), this.refresh.bind(this));
     this.router.post("/logout", validateBody(refreshSchema), authenticate, requireAuthentication(), this.logout.bind(this));
 
@@ -71,16 +72,8 @@ export class AuthenticationAPI extends APIModule {
   private async refresh(req: TypedRequestBody<RefreshBody>, res: Response) {
     const { refreshToken } = req.body;
 
-    if (!refreshToken) {
-      return res.status(400).json({ error: "refreshToken is required" });
-    }
-
-    try {
-      const tokenPair = await this.authenticationService.rotateRefreshToken(refreshToken);
-      res.json(tokenPair);
-    } catch (err: Error | unknown) {
-      res.status(401).json({ error: err instanceof Error ? err.message : "Unknown error" });
-    }
+    const tokenPair = await this.authenticationService.rotateRefreshToken(refreshToken);
+    res.json(tokenPair);
   }
 
   /**

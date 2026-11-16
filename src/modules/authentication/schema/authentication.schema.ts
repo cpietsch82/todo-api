@@ -20,7 +20,9 @@ export const authentications = pgTable(
   (table) => [index("idx_auth_user_id").on(table.userId)],
 );
 
-// refresh tokens are only stored as sha256 hash, so a database leak does not expose usable tokens
+// refresh tokens are only stored as sha256 hash, so a database leak does not expose usable tokens.
+// All tokens created by rotating one login share a family id. A token is marked as used when it was rotated,
+// presenting a used token again is a sign of theft and revokes the whole family.
 export const refreshTokens = pgTable(
   "refresh_tokens",
   {
@@ -28,11 +30,17 @@ export const refreshTokens = pgTable(
     userId: uuid("user_id")
       .notNull()
       .references(() => users.userId, { onDelete: "cascade" }),
+    familyId: uuid("family_id").defaultRandom().notNull(),
     tokenHash: varchar("token_hash", { length: 64 }).notNull().unique(),
     expiresAt: timestamp("expires_at").notNull(),
+    usedAt: timestamp("used_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
-  (table) => [index("idx_refresh_tokens_user_id").on(table.userId), index("idx_refresh_tokens_expires_at").on(table.expiresAt)],
+  (table) => [
+    index("idx_refresh_tokens_user_id").on(table.userId),
+    index("idx_refresh_tokens_expires_at").on(table.expiresAt),
+    index("idx_refresh_tokens_family_id").on(table.familyId),
+  ],
 );
 
 export type Auth = typeof authentications.$inferSelect;

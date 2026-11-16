@@ -12,6 +12,7 @@ export type Permission =
   | "todo-comments:update"
   | "todo-comments:delete"
   | "users:read"
+  | "users:list"
   | "users:update"
   | "users:delete";
 
@@ -29,7 +30,8 @@ const USER_PERMISSIONS: readonly Permission[] = [
   "users:delete",
 ];
 
-const ADMIN_PERMISSIONS: readonly Permission[] = ["admin:all", ...USER_PERMISSIONS];
+// users:list (list all users) is intentionally admin only, normal users may only read their own profile
+const ADMIN_PERMISSIONS: readonly Permission[] = ["admin:all", "users:list", ...USER_PERMISSIONS];
 
 export const ROLE_PERMISSIONS: Readonly<Record<UserRole, readonly Permission[]>> = {
   user: USER_PERMISSIONS,
