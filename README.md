@@ -18,7 +18,7 @@ with persistent refresh tokens and role/permission based authorization.
 - **PGlite** - in-memory PostgreSQL used for tests
 
 **Authentication & Authorization**
-- **Jose** - signing and verifying JWT access tokens (HS256)
+- **Jose** - signing and verifying JWT access tokens (HS256, only tokens issued by this API for this API are accepted)
 - **bcrypt** - password hashing
 - Opaque **refresh tokens**, stored hashed (SHA-256) in the `refresh_tokens` table and rotated on every use.
   Rotated tokens are marked as used; presenting one again after a short grace period revokes the whole login
@@ -61,8 +61,8 @@ Validated at startup in `env.ts` (the process exits when something is missing or
 | `ALLOWED_ORIGINS` | Comma separated list of allowed CORS origins |
 | `LOG_FILE` | Optional path of a log file. The logs are written there in addition to stdout, rotated daily or at 10 MB with the newest 14 files kept. The compose file sets `/app/logs/api.log` (volume `api_logs`) |
 | `LOG_LEVEL` | `trace`, `debug`, `info`, `warn`, `error` or `fatal` |
-| `ACCESS_TOKEN_SECRET` / `REFRESH_TOKEN_SECRET` | Secrets for the tokens |
-| `ACCESS_TOKEN_TTL` | Lifetime of the access token, e.g. `15m` |
+| `ACCESS_TOKEN_SECRET` | Signs the JWT access tokens. In production at least 32 characters and no placeholder are required, otherwise the API does not start (e.g. `openssl rand -base64 48`) |
+| `ACCESS_TOKEN_TTL` | Lifetime of the access token as a number with a unit (`s`, `m`, `h`, `d`, `w`, `y`), default `15m` |
 | `REFRESH_TOKEN_TTL` / `REFRESH_TOKEN_TTL_MS` | Lifetime of the refresh token (`REFRESH_TOKEN_TTL_MS` is used) |
 | `BCRYPT_SALT_ROUNDS` | Cost factor for bcrypt (min. 8) |
 | `REFRESH_TOKEN_MAX_PER_USER` | Maximum number of active refresh tokens (logins on different devices) per user, default `6`; the oldest are removed |
@@ -145,6 +145,16 @@ of `ExpressAPI` (`respondBadRequest`, `respondConflict`, `respondAuthorizationRe
   (e.g. emails or password hashes) are replaced by `[REDACTED]`, and common secret fields (`password`, `token`,
   `refreshToken`, `authorization`, ...) are censored when they are logged as part of an object.
 - For development set `EXPOSE_ERROR_DETAILS=true` to receive the complete message and stack trace in the response.
+
+## Authentication
+
+- Access tokens are JWTs signed with HS256 and carry `iss`, `aud` and `sub` (the user id). They are only accepted when
+  algorithm, issuer, audience, expiry and the structure of the claims are correct.
+- The header has to be `Authorization: Bearer <token>`. A missing, invalid or expired token means "not authenticated":
+  public routes (login, refresh, health, ...) keep working, protected routes answer `401` with
+  `WWW-Authenticate: Bearer error="invalid_token"`, which is the signal for a client to refresh.
+- `POST /auth/logout` only needs the refresh token in the body, no access token, so a client with an expired access token
+  can still end its session on the server.
 
 ## Request Limits
 

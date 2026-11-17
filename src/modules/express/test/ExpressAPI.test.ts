@@ -207,12 +207,31 @@ describe("ExpressAPI", () => {
       expect(response.status).toBe(401);
     });
 
-    it("should return 403 for a protected route with an invalid token", async () => {
+    it("should return 401 for a protected route with an invalid token and tell why", async () => {
       const response = await request(server)
         .get("/api/express-protected/ping")
         .set("Authorization", "Bearer not-a-valid-token");
 
-      expect(response.status).toBe(403);
+      expect(response.status).toBe(401);
+      expect(response.headers["www-authenticate"]).toBe('Bearer error="invalid_token"');
+    });
+
+    it("should return 401 for a protected route when the header is not a Bearer token", async () => {
+      const response = await request(server).get("/api/express-protected/ping").set("Authorization", "Basic dXNlcjpwdw==");
+
+      expect(response.status).toBe(401);
+    });
+
+    it("should not tell anything about the token when there is none", async () => {
+      const response = await request(server).get("/api/express-protected/ping");
+
+      expect(response.headers["www-authenticate"]).toBeUndefined();
+    });
+
+    it("should keep public routes usable when the client still sends an invalid token", async () => {
+      const response = await request(server).get("/api/version").set("Authorization", "Bearer expired-or-broken");
+
+      expect(response.status).toBe(200);
     });
 
     it("should allow a protected route with a valid token and attach the user", async () => {

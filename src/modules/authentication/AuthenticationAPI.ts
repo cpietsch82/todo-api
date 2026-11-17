@@ -5,8 +5,6 @@ import { TypedRequestBody } from "../express/Express";
 import { validateBody } from "@/middleware/validate";
 import { RegisterBody, registerSchema, loginSchema, LoginBody, refreshSchema, RefreshBody } from "./schema/authentication.schema";
 import TokenService from "./TokenService";
-import { createAuthMiddleware } from "@/middleware/authenticateToken";
-import { requireAuthentication } from "@/middleware/permissions";
 import { createLoginRateLimiter, createRegisterRateLimiter } from "@/middleware/rateLimit";
 
 export class AuthenticationAPI extends APIModule {
@@ -25,19 +23,12 @@ export class AuthenticationAPI extends APIModule {
   }
 
   protected initializeRoutes(): void {
-    // TokenService is a singleton — using new TokenService() here avoids accessing
-    // this.tokenService before it is assigned (super() runs initializeRoutes before
-    // the constructor body sets this.tokenService).
-    const authenticate = createAuthMiddleware(new TokenService());
     this.router.post("/register", createRegisterRateLimiter(), validateBody(registerSchema), this.register.bind(this));
     this.router.post("/login", createLoginRateLimiter(), validateBody(loginSchema), this.login.bind(this));
     this.router.post("/refresh", validateBody(refreshSchema), this.refresh.bind(this));
-    this.router.post("/logout", validateBody(refreshSchema), authenticate, requireAuthentication(), this.logout.bind(this));
-
-    // -------------------------------------------------------------------------
-    // GET /auth/me  (protected Test-Route)
-    // -------------------------------------------------------------------------
-    // this.router.get("/me", authenticate, this.checkMe.bind(this));
+    // logout needs no access token: the refresh token itself proves that the client may revoke it,
+    // so a client with an expired access token can still end its session on the server
+    this.router.post("/logout", validateBody(refreshSchema), this.logout.bind(this));
   }
 
   private async checkMe(req: TypedRequestBody<{ user: object }>, res: Response) {

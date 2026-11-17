@@ -1,5 +1,6 @@
 import { BaseModule } from "../core/BaseModule";
 import { JWTPayload, jwtVerify, SignJWT } from "jose";
+import { z } from "zod";
 import crypto from "node:crypto";
 import env from "../../../env";
 import UserService from "../users/UserService";
@@ -8,6 +9,23 @@ import AuthorizationService from "../authorization/AuthorizationService";
 import { db } from "@/db";
 import { and, desc, eq, inArray, isNull, lt, or } from "drizzle-orm";
 import { refreshTokens } from "./schema/authentication.schema";
+
+// Access tokens are only accepted when they were issued by this api for this api, signed with HS256.
+export const JWT_ISSUER = "todo-api";
+export const JWT_AUDIENCE = "todo-api";
+const JWT_ALGORITHM = "HS256";
+
+// structure of the claims of our access tokens, so a token with a wrong structure is rejected instead of cast
+const jwtPayloadSchema = z
+  .object({
+    sub: z.string(),
+    id: z.uuid(),
+    email: z.string(),
+    username: z.string(),
+    roles: z.array(z.string()),
+    permissions: z.array(z.string()),
+  })
+  .refine((claims) => claims.sub === claims.id, { message: "sub does not match id" });
 
 export interface JwtPayload extends JWTPayload {
   id: string;
@@ -58,9 +76,12 @@ class TokenService extends BaseModule {
     const secretKey = crypto.createSecretKey(secret, "utf-8");
 
     return new SignJWT(payload)
-      .setProtectedHeader({ alg: "HS256" })
+      .setProtectedHeader({ alg: JWT_ALGORITHM })
+      .setIssuer(JWT_ISSUER)
+      .setAudience(JWT_AUDIENCE)
+      .setSubject(payload.id)
       .setIssuedAt()
-      .setExpirationTime(env.ACCESS_TOKEN_TTL || "7d")
+      .setExpirationTime(env.ACCESS_TOKEN_TTL)
       .sign(secretKey);
   }
 
@@ -114,7 +135,13 @@ class TokenService extends BaseModule {
 
   async verifyAccessToken(token: string): Promise<JwtPayload> {
     const secretKey = crypto.createSecretKey(env.ACCESS_TOKEN_SECRET, "utf-8");
-    const { payload } = await jwtVerify(token, secretKey);
+    const { payload } = await jwtVerify(token, secretKey, {
+      algorithms: [JWT_ALGORITHM],
+      issuer: JWT_ISSUER,
+      audience: JWT_AUDIENCE,
+      requiredClaims: ["sub", "iat", "exp"],
+    });
+    jwtPayloadSchema.parse(payload);
 
     return payload as JwtPayload;
   }

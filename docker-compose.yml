@@ -1,10 +1,11 @@
 services:
   postgres:
     image: postgres:16-alpine
+    container_name: todo-database
     env_file:
       - .env.database
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - ./postgres_data:/var/lib/postgresql/data
     ports:
       # only reachable from this machine (e.g. for npm run dev), the api reaches postgres via the compose network
       - "127.0.0.1:5432:5432"
@@ -37,7 +38,7 @@ services:
       # The files are rotated daily or at 10 MB, the newest 14 are kept.
       LOG_FILE: /app/logs/api.log
     volumes:
-      - api_logs:/app/logs
+      - ./api_logs:/app/logs
     security_opt:
       - no-new-privileges:true
     cap_drop:

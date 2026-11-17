@@ -376,7 +376,7 @@ describe("AuthAPI", () => {
       expect(refreshResponse.status).toBe(401);
     });
 
-    it("should return 401 when no accessToken is provided", async () => {
+    it("should logout without an accessToken and revoke the refreshToken", async () => {
       const registerResponse = await request(server)
         .post("/api/auth/register")
         .set("Content-Type", "application/json")
@@ -388,8 +388,29 @@ describe("AuthAPI", () => {
         .post("/api/auth/logout")
         .set("Content-Type", "application/json")
         .send({ refreshToken });
+      const refreshResponse = await request(server).post("/api/auth/refresh").send({ refreshToken });
 
-      expect(response.status).toBe(401);
+      expect(response.status).toBe(200);
+      expect(refreshResponse.status).toBe(401);
+    });
+
+    it("should logout even when the sent accessToken is expired or invalid", async () => {
+      const registerResponse = await request(server).post("/api/auth/register").send(VALID_REGISTER_PAYLOAD);
+      const { refreshToken } = registerResponse.body;
+
+      const response = await request(server)
+        .post("/api/auth/logout")
+        .set("Authorization", "Bearer expired-or-broken")
+        .send({ refreshToken });
+
+      expect(response.status).toBe(200);
+      expect((await request(server).post("/api/auth/refresh").send({ refreshToken })).status).toBe(401);
+    });
+
+    it("should not fail for an unknown refreshToken", async () => {
+      const response = await request(server).post("/api/auth/logout").send({ refreshToken: "unknown-token" });
+
+      expect(response.status).toBe(200);
     });
 
     it("should return 400 when refreshToken is missing from the body", async () => {
