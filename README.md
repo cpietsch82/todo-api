@@ -18,7 +18,7 @@ with persistent refresh tokens and role/permission based authorization.
 - **PGlite** - in-memory PostgreSQL used for tests
 
 **Authentication & Authorization**
-- **Jose** - signing and verifying JWT access tokens (HS256)
+- **Jose** - signing and verifying JWT access tokens (HS256, only tokens issued by this API for this API are accepted)
 - **bcrypt** - password hashing
 - Opaque **refresh tokens**, stored hashed (SHA-256) in the `refresh_tokens` table and rotated on every use.
   Rotated tokens are marked as used; presenting one again after a short grace period revokes the whole login
@@ -44,7 +44,7 @@ with persistent refresh tokens and role/permission based authorization.
 nvm use                # Node 24
 npm ci
 cp .env.example .env   # and fill in all variables listed below
-npm run docker:up      # starts the Docker Compose services including Adminer (profile "dev")
+npm run docker:db      # starts only Postgres via Docker Compose (docker-compose.yml + docker-compose.dev.yml)
 npm run db:migrate     # applies the migrations from ./drizzle
 npm run dev            # starts the API with nodemon
 ```
@@ -59,10 +59,10 @@ Validated at startup in `env.ts` (the process exits when something is missing or
 | `PORT` | Port of the API (default `3000`) |
 | `DATABASE_URL` | Must start with `postgresql://` (not needed for tests) |
 | `ALLOWED_ORIGINS` | Comma separated list of allowed CORS origins |
-| `LOG_FILE` | Optional path of a log file. The logs are written there in addition to stdout, rotated daily or at 10 MB with the newest 14 files kept. The compose file sets `/app/logs/api.log` (volume `api_logs`) |
+| `LOG_FILE` | Optional path of a log file. The logs are written there in addition to stdout, rotated daily or at 10 MB with the newest 14 files kept. The compose file sets `/app/logs/api.log` (bind mount `./api_logs`) |
 | `LOG_LEVEL` | `trace`, `debug`, `info`, `warn`, `error` or `fatal` |
-| `ACCESS_TOKEN_SECRET` / `REFRESH_TOKEN_SECRET` | Secrets for the tokens |
-| `ACCESS_TOKEN_TTL` | Lifetime of the access token, e.g. `15m` |
+| `ACCESS_TOKEN_SECRET` | Signs the JWT access tokens. In production at least 32 characters and no placeholder are required, otherwise the API does not start (e.g. `openssl rand -base64 48`) |
+| `ACCESS_TOKEN_TTL` | Lifetime of the access token as a number with a unit (`s`, `m`, `h`, `d`, `w`, `y`), default `15m` |
 | `REFRESH_TOKEN_TTL` / `REFRESH_TOKEN_TTL_MS` | Lifetime of the refresh token (`REFRESH_TOKEN_TTL_MS` is used) |
 | `BCRYPT_SALT_ROUNDS` | Cost factor for bcrypt (min. 8) |
 | `REFRESH_TOKEN_MAX_PER_USER` | Maximum number of active refresh tokens (logins on different devices) per user, default `6`; the oldest are removed |
@@ -85,7 +85,8 @@ the API container reads `.env.api`.
 | `npm run test:coverage` | Run the tests with coverage |
 | `npm run lint` / `lint:fix` | Lint the code |
 | `npm run db:generate` / `db:migrate` / `db:push` / `db:studio` | Drizzle Kit commands |
-| `npm run docker:up` / `docker:down` / `docker:reset` | Manage the Docker Compose services |
+| `npm run docker:db` / `docker:up` / `docker:adminer` | Start only Postgres / the whole stack with a locally built API image / Adminer (development) |
+| `npm run docker:down` / `docker:logs` / `docker:restart` / `docker:reset` | Stop the services / follow the Postgres logs / restart Postgres / recreate the containers (does not delete `postgres_data`) |
 
 Releases are created with `npm version` on the `main` branch; the CI verifies that the release tag matches
 the version in `package.json`.
@@ -111,12 +112,43 @@ Permissions (`todos:read`, `users:delete`, ...) are defined in `src/modules/auth
 
 ## Docker
 
-- **Ports:** Postgres (`5432`) and Adminer (`8080`) are only bound to `127.0.0.1`, the API (`3000`) is reachable from
-  the network. The API reaches Postgres through the compose network, the host port is only for local tools such as
-  `npm run dev` or `npm run db:studio`.
-- **Adminer** belongs to the compose profile `dev` and is only started on demand:
-  `docker compose --profile dev up -d adminer` (the `npm run docker:*` scripts include the profile).
-  On a server open it through an SSH tunnel, e.g. `ssh -L 8080:127.0.0.1:8080 user@nas`, then visit `http://localhost:8080`.
+There are two compose files, so development and production stay strictly separated:
+
+| File | Purpose |
+|---|---|
+| `docker-compose.yml` | **Base, safe for production (NAS):** Postgres without a host port, Adminer on demand, the API from GHCR in a fixed version |
+| `docker-compose.dev.yml` | **Development only:** publishes Postgres on `127.0.0.1:5432` and builds the API image locally. Never copy it to the NAS |
+
+The `npm run docker:*` scripts always use both files.
+
+### Development
+- `npm run docker:db` starts only Postgres; the API runs on the host with `npm run dev`. In `.env` the `DATABASE_URL`
+  must use `localhost` as host (not `postgres`, that name only exists inside of the compose network).
+- `npm run docker:up` starts the whole stack including an API image built from the local `Dockerfile`
+  (tag `API_IMAGE_TAG=local` in `.env`). Do not run it together with `npm run dev`, both use port 3000.
+- `npm run docker:adminer` starts Adminer on `http://localhost:8080` (server `postgres`, user and password from `.env.database`).
+
+### Production (NAS)
+- Copy `docker-compose.yml`, `.env.api` and `.env.database` to the NAS (not `docker-compose.dev.yml` and not the
+  development `.env`). The image `ghcr.io/cpietsch82/todo-api` is private, so run `docker login ghcr.io` once with an
+  access token that has `read:packages`.
+- The version of the API image is `API_IMAGE_TAG` in `.env.api`. Docker Compose reads variables for the compose file
+  from the `--env-file`, not from the `env_file` of a service, so start every command with it:
+  `docker compose --env-file .env.api up -d` (alternatively `export COMPOSE_ENV_FILES=.env.api`). Without a tag the
+  command stops with a clear message, there is no implicit `latest`.
+- **Update:** release a new version (the CI pushes the image), set the new `API_IMAGE_TAG` in `.env.api`, then
+  `docker compose --env-file .env.api pull && docker compose --env-file .env.api up -d`.
+  **Rollback:** set the old tag and run the same commands.
+- **Adminer** is only started on demand: `docker compose --env-file .env.api --profile tools up -d adminer`, and stopped
+  afterwards with `docker compose --env-file .env.api stop adminer`. Open it through an SSH tunnel, e.g.
+  `ssh -L 8080:127.0.0.1:8080 user@nas`, then visit `http://localhost:8080`.
+- The data of Postgres (`./postgres_data`) and the logs of the API (`./api_logs`) are bind mounts, so they are normal
+  folders next to the compose file. The API runs as the user `node` (uid 1000), so `api_logs` must be writable for it
+  (if the API only logs to stdout, run `chown 1000:1000 api_logs` once).
+
+### Container
+- **Ports:** Postgres and Adminer are never reachable from the network (Adminer only on `127.0.0.1`), the API
+  (`3000`) is. The API reaches Postgres through the compose network.
 - **API container:** runs as the unprivileged user `node`, without Linux capabilities and with `no-new-privileges`.
   The image has a `HEALTHCHECK` on `/api/health`, so `docker ps` shows whether the API is healthy.
 
@@ -127,9 +159,8 @@ The API always logs to stdout (`docker compose logs -f api`). If `LOG_FILE` is s
 a new file is started every day or at 10 MB, the newest 14 files are kept and `current.log` always points to the active
 one. Older files are removed, also those of earlier container runs, so the log directory must only contain these logs.
 
-In Docker the directory `/app/logs` is the volume `api_logs`, so the files stay available after a restart or update.
-On the NAS the volume lies below the docker volume directory (e.g. `.../volumes/todo-api_api_logs/_data`), or read it with
-`docker run --rm -v todo-api_api_logs:/logs alpine tail -n 100 /logs/current.log`. If the file cannot be written, the API
+In Docker the directory `/app/logs` is the bind mount `./api_logs`, so the files stay available after a restart or update
+and can be read on the NAS directly (`tail -n 100 api_logs/current.log`). If the file cannot be written, the API
 starts anyway and only logs to stdout. Secrets and the values of database queries are removed from the logs.
 
 ## Error Handling
@@ -145,6 +176,16 @@ of `ExpressAPI` (`respondBadRequest`, `respondConflict`, `respondAuthorizationRe
   (e.g. emails or password hashes) are replaced by `[REDACTED]`, and common secret fields (`password`, `token`,
   `refreshToken`, `authorization`, ...) are censored when they are logged as part of an object.
 - For development set `EXPOSE_ERROR_DETAILS=true` to receive the complete message and stack trace in the response.
+
+## Authentication
+
+- Access tokens are JWTs signed with HS256 and carry `iss`, `aud` and `sub` (the user id). They are only accepted when
+  algorithm, issuer, audience, expiry and the structure of the claims are correct.
+- The header has to be `Authorization: Bearer <token>`. A missing, invalid or expired token means "not authenticated":
+  public routes (login, refresh, health, ...) keep working, protected routes answer `401` with
+  `WWW-Authenticate: Bearer error="invalid_token"`, which is the signal for a client to refresh.
+- `POST /auth/logout` only needs the refresh token in the body, no access token, so a client with an expired access token
+  can still end its session on the server.
 
 ## Request Limits
 
@@ -193,7 +234,9 @@ todo-api/
 ├── tests/                          # Test setup (PGlite database, Express app) and helpers
 ├── drizzle/                        # SQL migrations
 ├── .github/workflows/ci.yml        # Lint, build, test, Docker push
-├── Dockerfile / docker-compose.yml / entrypoint.sh
+├── Dockerfile / entrypoint.sh
+├── docker-compose.yml              # base for production (NAS)
+├── docker-compose.dev.yml          # additions for development only
 ├── tsconfig.json                   # IDE and type checking (includes tests)
 ├── tsconfig.build.json             # Production build (excludes tests)
 ├── drizzle.config.ts / env.ts / nodemon.json / vitest.config.ts
