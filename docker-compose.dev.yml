@@ -1,0 +1,12 @@
+# Additions for local development, used together with docker-compose.yml (see the docker:* npm scripts).
+# Never use this file on the NAS.
+services:
+  postgres:
+    ports:
+      # only reachable from this machine, for npm run dev and npm run db:*
+      - "127.0.0.1:5432:5432"
+
+  api:
+    # the image is built from the local Dockerfile instead of being pulled from GHCR
+    image: todo-api:${API_IMAGE_TAG:-local}
+    build: .

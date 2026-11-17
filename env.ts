@@ -21,6 +21,11 @@ if (isDevelopment) {
 
 // for testing the database url is not necessary,
 // because we're using an in-memory database
+const MIN_SECRET_LENGTH = 32;
+// exact placeholder values, and anything that says "change me" (like the example value of .env.example)
+const PLACEHOLDER_SECRETS = ["access_token_secret", "mytestsecret", "secret", "password"];
+const CHANGE_ME_PATTERN = /change[-_ ]?me/i;
+
 export const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   APP_STAGE: z.enum(["dev", "test", "production"]).default("dev"),
@@ -31,9 +36,13 @@ export const envSchema = z.object({
   LOG_LEVEL: z.enum(["info", "warn", "error", "debug", "trace", "fatal"]).default("info"),
   DATABASE_URL: !isTesting ? z.string().startsWith('postgresql://') : z.string().default("YOUDONTKNOWME"),
   BCRYPT_SALT_ROUNDS: z.coerce.number().positive().min(8).default(10),
+  // signs the jwt access tokens (HS256), in production at least 32 characters are required
   ACCESS_TOKEN_SECRET: isTesting ? z.string().default("myTestSecret") : z.string(),
-  REFRESH_TOKEN_SECRET: isTesting ? z.string().default("myTestRefreshSecret") : z.string(),
-  ACCESS_TOKEN_TTL: z.string().default("15m"),
+  // lifetime of the access token as a number with a unit, e.g. 30s, 15m, 2h, 1d
+  ACCESS_TOKEN_TTL: z
+    .string()
+    .regex(/^\d+\s?(s|m|h|d|w|y)$/, "must be a number with a unit (s, m, h, d, w or y), e.g. 15m")
+    .default("15m"),
   REFRESH_TOKEN_TTL: z.string().default("7d"),
   REFRESH_TOKEN_TTL_MS: z.coerce
     .number()
@@ -52,10 +61,21 @@ export const envSchema = z.object({
   REGISTER_RATE_LIMIT_WINDOW_MS: z.coerce.number().positive().default(60 * 60 * 1000),
   // developer flag: send the complete error (message and stack) in the response instead of a generic text
   EXPOSE_ERROR_DETAILS: z.stringbool().default(false),
-}).refine((config) => !(config.APP_STAGE === "production" && config.EXPOSE_ERROR_DETAILS), {
-  message: "EXPOSE_ERROR_DETAILS must not be enabled in production",
-  path: ["EXPOSE_ERROR_DETAILS"],
-});
+})
+  .refine((config) => !(config.APP_STAGE === "production" && config.EXPOSE_ERROR_DETAILS), {
+    message: "EXPOSE_ERROR_DETAILS must not be enabled in production",
+    path: ["EXPOSE_ERROR_DETAILS"],
+  })
+  .refine((config) => config.APP_STAGE !== "production" || config.ACCESS_TOKEN_SECRET.length >= MIN_SECRET_LENGTH, {
+    message: `ACCESS_TOKEN_SECRET must have at least ${MIN_SECRET_LENGTH} characters in production (e.g. openssl rand -base64 48)`,
+    path: ["ACCESS_TOKEN_SECRET"],
+  })
+  .refine(
+    (config) =>
+      config.APP_STAGE !== "production" ||
+      !(PLACEHOLDER_SECRETS.includes(config.ACCESS_TOKEN_SECRET.toLowerCase()) || CHANGE_ME_PATTERN.test(config.ACCESS_TOKEN_SECRET)),
+    { message: "ACCESS_TOKEN_SECRET must not be a placeholder value in production", path: ["ACCESS_TOKEN_SECRET"] },
+  );
 
 export type Env = z.infer<typeof envSchema>;
 
