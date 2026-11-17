@@ -1,10 +1,13 @@
 import { describe, it, expect } from "vitest";
 import { envSchema } from "../env";
 
+// The input is built completely here and does not use process.env. Otherwise the result would depend on the files and
+// variables of the machine (e.g. a local .env.test) and differ between a developer machine and the CI.
 const baseEnv = {
-  ...process.env,
   APP_STAGE: "dev",
   DATABASE_URL: "postgresql://user:password@localhost:5432/db",
+  // long enough for the production rule, so tests of other settings are not affected by it
+  ACCESS_TOKEN_SECRET: "a-test-secret-with-more-than-32-characters",
 };
 
 describe("env EXPOSE_ERROR_DETAILS", () => {
