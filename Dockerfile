@@ -17,6 +17,9 @@ RUN npm run build
 # ---------- Production ----------
 FROM node:24-alpine AS production
 
+# links the image on GHCR with the repository, so it inherits the access rights of the repository
+LABEL org.opencontainers.image.source="https://github.com/cpietsch82/todo-api"
+
 WORKDIR /app
 
 ENV NODE_ENV=production

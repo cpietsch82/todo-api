@@ -1,3 +1,8 @@
+# Base configuration, safe for production (the NAS). For development add docker-compose.dev.yml:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d postgres   (see the docker:* npm scripts)
+#
+# The image tag comes from API_IMAGE_TAG. On the NAS it is set in .env.api, so start with
+#   docker compose --env-file .env.api up -d
 services:
   postgres:
     image: postgres:16-alpine
@@ -5,10 +10,8 @@ services:
     env_file:
       - .env.database
     volumes:
+      # the data lives in this folder (bind mount), the api reaches postgres through the compose network
       - ./postgres_data:/var/lib/postgresql/data
-    ports:
-      # only reachable from this machine (e.g. for npm run dev), the api reaches postgres via the compose network
-      - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
@@ -19,8 +22,8 @@ services:
   adminer:
     image: adminer:4
     container_name: todo-adminer
-    # only started on demand: docker compose --profile dev up -d
-    profiles: ["dev"]
+    # only started on demand: docker compose --profile tools up -d adminer
+    profiles: ["tools"]
     ports:
       # only reachable from the machine it runs on, use an SSH tunnel to reach it on the NAS
       - "127.0.0.1:8080:8080"
@@ -30,14 +33,16 @@ services:
     restart: unless-stopped
 
   api:
-    image: todo-api:latest
+    # fixed version of the image, no implicit "latest". Update: change API_IMAGE_TAG, then docker compose pull && up -d
+    image: ghcr.io/cpietsch82/todo-api:${API_IMAGE_TAG:?API_IMAGE_TAG is not set, put it in .env.api and use --env-file .env.api}
     env_file:
       - .env.api
     environment:
-      # the logs are also written to the volume below (and always to stdout, see docker compose logs api).
+      # the logs are also written to the folder below (and always to stdout, see docker compose logs api).
       # The files are rotated daily or at 10 MB, the newest 14 are kept.
       LOG_FILE: /app/logs/api.log
     volumes:
+      # the api runs as the user node (uid 1000), so this folder has to be writable for it
       - ./api_logs:/app/logs
     security_opt:
       - no-new-privileges:true
@@ -49,11 +54,3 @@ services:
       postgres:
         condition: service_healthy
     restart: unless-stopped
-
-volumes:
-  postgres_data:
-  # log files of the api (api.<date>.<number>.log, current.log points to the active one), on the NAS found under
-  # the docker volume directory of this project (api_logs).
-  # To read them in a normal folder instead, replace the volume mount of the api by "./logs:/app/logs" and
-  # run "chown 1000:1000 logs" once, because the api runs as the user node (uid 1000).
-  api_logs:
