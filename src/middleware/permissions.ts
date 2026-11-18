@@ -1,5 +1,6 @@
 import type { NextFunction, Request, RequestHandler, Response } from "express";
-import { hasEveryPermission, hasPermission, type Permission } from "@/modules/authorization/permissions";
+import { hasAnyPermission, hasEveryPermission, hasPermission, type Permission } from "@/modules/authorization/permissions";
+import AuthorizationService from "@/modules/authorization/AuthorizationService";
 import { TodoCommentService } from "@/modules/todos/TodoCommentService";
 import { TodoService } from "@/modules/todos/TodoService";
 import UserService from "@/modules/users/UserService";
@@ -42,6 +43,58 @@ export function requirePermissions(...required: Permission[]): RequestHandler {
 
     next();
   };
+}
+
+/**
+ * Checks the permissions against the database instead of the claims of the access token, so a revoked role takes
+ * effect with the next request and not only when the token expires. Costs one database round trip per request,
+ * therefore it is used for the sensitive routes (admin area) only.
+ */
+function createFreshPermissionCheck(
+  isAllowed: (granted: Permission[]) => boolean,
+  describe: string,
+  authorizationService: AuthorizationService,
+): RequestHandler {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    const user = getAuthenticatedUser(req, res);
+    if (!user) return;
+
+    const stored = await authorizationService.getStoredAuthorization(user.id);
+    // the user was deleted after the token was issued
+    if (!stored) {
+      res.respondAuthorizationRequired();
+      return;
+    }
+
+    if (!isAllowed(stored.permissions)) {
+      res.respondAuthorizationInsufficient(describe, true);
+      return;
+    }
+
+    next();
+  };
+}
+
+/**
+ * Like requirePermissions, but the permissions are read from the database on every request.
+ */
+export function requireFreshPermissions(...required: Permission[]): RequestHandler {
+  return createFreshPermissionCheck(
+    (granted) => hasEveryPermission(granted, required),
+    `Missing permissions: ${required.join(", ")}`,
+    new AuthorizationService(),
+  );
+}
+
+/**
+ * Requires at least one of the permissions, read from the database on every request.
+ */
+export function requireAnyFreshPermission(...candidates: Permission[]): RequestHandler {
+  return createFreshPermissionCheck(
+    (granted) => hasAnyPermission(granted, candidates),
+    "Insufficient Permissions!",
+    new AuthorizationService(),
+  );
 }
 
 /**

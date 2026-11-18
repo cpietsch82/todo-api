@@ -51,7 +51,7 @@ export class TodoService extends BaseModule {
   }
 
   public async deleteTodo(todoId: string): Promise<Todo> {
-    const [todo] = await db.delete(todos).where(eq(todos.todoId, todoId));
+    const [todo] = await db.delete(todos).where(eq(todos.todoId, todoId)).returning();
 
     return todo;
   }

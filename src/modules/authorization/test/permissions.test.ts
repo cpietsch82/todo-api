@@ -1,10 +1,13 @@
 import { describe, it, expect } from "vitest";
 import {
   buildJwtClaims,
+  DOCKER_PERMISSIONS,
   getPermissionsForRole,
   getPermissionsForRoles,
+  hasAnyPermission,
   hasEveryPermission,
   hasPermission,
+  isExplicitPermission,
   ROLE_PERMISSIONS,
 } from "@modules/authorization/permissions";
 
@@ -104,6 +107,60 @@ describe("permissions", () => {
 
     it("should return false when no permissions are defined but some are required", () => {
       expect(hasEveryPermission(undefined, ["todos:read"])).toBe(false);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // docker permissions and the role deployer
+  // ---------------------------------------------------------------------------
+  describe("docker permissions", () => {
+    it("should give all docker permissions to the role deployer and nothing else", () => {
+      expect(getPermissionsForRole("deployer")).toEqual([...DOCKER_PERMISSIONS]);
+    });
+
+    it("should give no docker permission to the roles admin and user", () => {
+      for (const permission of DOCKER_PERMISSIONS) {
+        expect(getPermissionsForRole("admin")).not.toContain(permission);
+        expect(getPermissionsForRole("user")).not.toContain(permission);
+      }
+    });
+
+    it.each(DOCKER_PERMISSIONS)("should not grant %s through admin:all", (permission) => {
+      expect(isExplicitPermission(permission)).toBe(true);
+      expect(hasPermission(["admin:all"], permission)).toBe(false);
+      expect(hasPermission(getPermissionsForRole("admin"), permission)).toBe(false);
+    });
+
+    it("should grant a docker permission when it is granted explicitly", () => {
+      expect(hasPermission(["admin:docker:deploy"], "admin:docker:deploy")).toBe(true);
+      expect(hasPermission(getPermissionsForRoles(["admin", "deployer"]), "admin:docker:deploy")).toBe(true);
+    });
+
+    it("should not let one docker permission cover another one", () => {
+      expect(hasPermission(["admin:docker:status"], "admin:docker:deploy")).toBe(false);
+    });
+
+    it("should still let admin:all cover the permissions that are not explicit", () => {
+      expect(isExplicitPermission("users:delete")).toBe(false);
+      expect(hasPermission(["admin:all"], "users:delete")).toBe(true);
+    });
+
+    it("should require every permission including the explicit ones", () => {
+      expect(hasEveryPermission(["admin:all"], ["users:list", "admin:docker:pull"])).toBe(false);
+      expect(hasEveryPermission(["admin:all", "admin:docker:pull"], ["users:list", "admin:docker:pull"])).toBe(true);
+    });
+  });
+
+  describe("hasAnyPermission", () => {
+    it("should return true when one of the candidates is granted", () => {
+      expect(hasAnyPermission(["admin:docker:logs"], ["admin:all", ...DOCKER_PERMISSIONS])).toBe(true);
+      expect(hasAnyPermission(["admin:all"], ["admin:all", ...DOCKER_PERMISSIONS])).toBe(true);
+    });
+
+    it("should return false when none of the candidates is granted", () => {
+      expect(hasAnyPermission(getPermissionsForRole("user"), ["admin:all", ...DOCKER_PERMISSIONS])).toBe(false);
+      expect(hasAnyPermission(undefined, ["admin:all"])).toBe(false);
+      expect(hasAnyPermission(["admin:all"], [])).toBe(false);
     });
   });
 

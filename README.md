@@ -105,10 +105,27 @@ All routes live under `/api`. Everything except the routes marked as public requ
 | `/todos` | CRUD for todos (owner or admin) |
 | `/todo-comments` | CRUD for todo comments (owner or admin) |
 | `/users` | List, read, update and delete users (own user or admin) |
-| `/admin` | Admin only, no routes yet |
+| `/admin` | Only for the roles `admin` and `deployer`, no routes yet |
 
-Permissions (`todos:read`, `users:delete`, ...) are defined in `src/modules/authorization/permissions.ts`;
-`admin:all` grants every permission.
+Permissions (`todos:read`, `users:delete`, ...) are defined in `src/modules/authorization/permissions.ts`.
+
+| Role | Permissions |
+|---|---|
+| `user` | Own todos, comments and profile (default role of every account) |
+| `admin` | `admin:all` and `users:list`. `admin:all` grants every permission **except** the docker ones |
+| `deployer` | Only the docker operations: `admin:docker:status`, `admin:docker:logs`, `admin:docker:pull`, `admin:docker:deploy`, `admin:docker:restart` |
+
+Controlling docker gives full control over the NAS, so these permissions are never covered by `admin:all` and have
+to be granted with the role `deployer` (roles are combined, a deployer usually also has the role `user` or `admin`).
+Assign it in the database, e.g. with Adminer:
+
+```sql
+INSERT INTO user_roles (user_id, role_id)
+SELECT u.user_id, r.role_id FROM users u, roles r WHERE u.email = '<email>' AND r.name = 'deployer';
+```
+
+Routes of the admin area check the permissions against the database on every request (`requireFreshPermissions`),
+so a revoked role takes effect immediately and not only when the access token expires.
 
 ## Docker
 

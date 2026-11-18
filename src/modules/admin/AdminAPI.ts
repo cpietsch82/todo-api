@@ -1,6 +1,7 @@
 import { APIModule } from "../core/APIModule";
 import { AdminService } from "./AdminService";
-import { requirePermissions } from "@/middleware/permissions";
+import { requireAnyFreshPermission } from "@/middleware/permissions";
+import { DOCKER_PERMISSIONS } from "@/modules/authorization/permissions";
 
 export class AdminAPI extends APIModule {
   public static instance: AdminAPI;
@@ -18,8 +19,10 @@ export class AdminAPI extends APIModule {
   }
 
   protected initializeRoutes(): void {
-    // every route of this module is admin only
-    this.router.use(requirePermissions("admin:all"));
+    // The admin area is only open for admins and deployers, checked against the database on every request.
+    // This is only the outer gate: every route additionally requires its own permission with requireFreshPermissions,
+    // e.g. requireFreshPermissions("admin:docker:deploy") (admin:all does not cover the docker permissions).
+    this.router.use(requireAnyFreshPermission("admin:all", ...DOCKER_PERMISSIONS));
   }
 }
 

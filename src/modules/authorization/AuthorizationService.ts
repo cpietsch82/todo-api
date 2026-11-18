@@ -1,6 +1,7 @@
 import { db } from "@/db";
 import { BaseModule } from "@modules/core/BaseModule";
 import { permissions, rolePermissions, roles, userRoles } from "@/modules/authorization/schema/authorization.schema";
+import { users } from "@/modules/users/schema/user.schema";
 import { eq } from "drizzle-orm";
 import type { AuthorizationClaims, Permission, RoleName } from "@/modules/authorization/permissions";
 
@@ -33,9 +34,28 @@ export class AuthorizationService extends BaseModule {
     }
   }
 
+  /**
+   * Resolves roles and permissions for a login or a token refresh. A user without a role gets the default role.
+   */
   async getAuthorizationForUser(userId: string): Promise<AuthorizationClaims> {
     await this.ensureDefaultRoleAssignment(userId);
 
+    return this.readAuthorization(userId);
+  }
+
+  /**
+   * Reads the current roles and permissions from the database without changing anything, e.g. to check a request
+   * against the database instead of the (up to ACCESS_TOKEN_TTL old) claims of its access token.
+   * @returns undefined when the user does not exist (anymore)
+   */
+  async getStoredAuthorization(userId: string): Promise<AuthorizationClaims | undefined> {
+    const [user] = await db.select({ userId: users.userId }).from(users).where(eq(users.userId, userId)).limit(1);
+    if (!user) return undefined;
+
+    return this.readAuthorization(userId);
+  }
+
+  private async readAuthorization(userId: string): Promise<AuthorizationClaims> {
     const roleRows = await db
       .select({ roleName: roles.name })
       .from(userRoles)

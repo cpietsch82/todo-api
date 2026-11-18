@@ -57,6 +57,13 @@
       "when": 1793653190375,
       "tag": "0007_refresh_token_families",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1793653191375,
+      "tag": "0008_add_deployer_role",
+      "breakpoints": true
     }
   ]
 }
