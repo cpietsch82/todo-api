@@ -46,6 +46,14 @@ export const createLoginRateLimiter = () =>
     message: "Too many login attempts, please try again later.",
   });
 
+/** Limits the docker operations (pull, deploy, restart) per IP. */
+export const createDockerOperationRateLimiter = () =>
+  createRateLimiter({
+    windowMs: env.DOCKER_OPERATION_RATE_LIMIT_WINDOW_MS,
+    limit: env.DOCKER_OPERATION_RATE_LIMIT_MAX,
+    message: "Too many docker operations from this IP, please try again later.",
+  });
+
 /** Limits the creation of accounts per IP. */
 export const createRegisterRateLimiter = () =>
   createRateLimiter({

@@ -5,10 +5,11 @@ export default defineConfig({
   test: {
     reporters: ['verbose'],
     globals: true,
-    // the strict limits of the auth routes would block the many registrations and logins of the tests
+    // the strict limits of the auth routes and the docker operations would block the many requests of the tests
     env: {
       LOGIN_RATE_LIMIT_MAX: "1000",
       REGISTER_RATE_LIMIT_MAX: "1000",
+      DOCKER_OPERATION_RATE_LIMIT_MAX: "1000",
     },
     environment: "node",
     setupFiles: ["./tests/setup.ts"],

@@ -59,6 +59,9 @@ export const envSchema = z.object({
   LOGIN_RATE_LIMIT_WINDOW_MS: z.coerce.number().positive().default(15 * 60 * 1000),
   REGISTER_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(5),
   REGISTER_RATE_LIMIT_WINDOW_MS: z.coerce.number().positive().default(60 * 60 * 1000),
+  // docker operations (pull, deploy, restart) that may be requested per IP
+  DOCKER_OPERATION_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(10),
+  DOCKER_OPERATION_RATE_LIMIT_WINDOW_MS: z.coerce.number().positive().default(15 * 60 * 1000),
   // developer flag: send the complete error (message and stack) in the response instead of a generic text
   EXPOSE_ERROR_DETAILS: z.stringbool().default(false),
 })

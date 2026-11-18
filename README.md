@@ -69,6 +69,7 @@ Validated at startup in `env.ts` (the process exits when something is missing or
 | `TRUST_PROXY` | Number of reverse proxies in front of the API (default `0`). Needed so the rate limits use the real client IP; do not set it without a proxy |
 | `LOGIN_RATE_LIMIT_MAX` / `LOGIN_RATE_LIMIT_WINDOW_MS` | Failed login attempts per IP within the window (default `10` per 15 minutes) |
 | `REGISTER_RATE_LIMIT_MAX` / `REGISTER_RATE_LIMIT_WINDOW_MS` | Registrations per IP within the window (default `5` per hour) |
+| `DOCKER_OPERATION_RATE_LIMIT_MAX` / `DOCKER_OPERATION_RATE_LIMIT_WINDOW_MS` | Docker operations (pull, deploy, restart) per IP within the window (default `10` per 15 minutes) |
 | `EXPOSE_ERROR_DETAILS` | Developer flag (default `false`): responses contain the complete error message and stack trace of unexpected errors. The API refuses to start with it when `APP_STAGE=production` |
 | `RATE_LIMIT_PER_IP` / `RATE_LIMIT_WINDOW_MS` | Requests per IP (min. 100) within the time window |
 
@@ -105,7 +106,7 @@ All routes live under `/api`. Everything except the routes marked as public requ
 | `/todos` | CRUD for todos (owner or admin) |
 | `/todo-comments` | CRUD for todo comments (owner or admin) |
 | `/users` | List, read, update and delete users (own user or admin) |
-| `/admin` | Only for the roles `admin` and `deployer`, no routes yet |
+| `/admin` | Only for the roles `admin` and `deployer`, see [Docker operations](#docker-operations-in-progress) |
 
 Permissions (`todos:read`, `users:delete`, ...) are defined in `src/modules/authorization/permissions.ts`.
 
@@ -132,8 +133,20 @@ so a revoked role takes effect immediately and not only when the access token ex
 The api never talks to docker itself. Operations that change the containers (`pull` and `deploy` of an api version,
 `restart` of the api) are queued in the table `deployments` (`src/modules/admin/DeploymentService.ts`), a separate
 updater container will execute them one after another. Only one operation can be queued or running at a time, which
-the database enforces with a unique index. Only released versions (`1.2.3`) can be pulled or deployed. The routes and
-the updater are not built yet.
+the database enforces with a unique index. Only released versions (`1.2.3`) can be pulled or deployed.
+
+| Route | Permission | Description |
+|---|---|---|
+| `GET /api/admin/version` | `admin:docker:status` | Version of the running api |
+| `GET /api/admin/deployments?limit=20` | `admin:docker:status` | History of the operations, newest first, without output (`limit` 1-100) |
+| `GET /api/admin/deployments/:deploymentId` | `admin:docker:status` | One operation including the end of its command output |
+| `POST /api/admin/deployments/pull` | `admin:docker:pull` | Body `{ "tag": "1.2.3" }`, pulls the api image of that version |
+| `POST /api/admin/deployments/deploy` | `admin:docker:deploy` | Body `{ "tag": "1.2.3" }`, switches the api to that version (update and rollback) |
+| `POST /api/admin/deployments/restart` | `admin:docker:restart` | No body, restarts the api container |
+
+The `POST` routes answer `202` with the queued operation and its status url in the `Location` header, `409` while
+another operation is queued or running, and are limited per IP (`DOCKER_OPERATION_RATE_LIMIT_MAX`). The updater that
+executes the operations is not built yet, so for now they stay queued.
 
 ## Docker
 
