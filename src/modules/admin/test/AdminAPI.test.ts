@@ -1,4 +1,9 @@
-import { describe, it, expect, beforeAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, afterEach } from "vitest";
+import ContainerService, { STATUS_STALE_AFTER_MS } from "@modules/admin/ContainerService";
+import { containerLogRequests, containerStatus } from "@modules/admin/schema/container.schema";
+import { ContainerReporter } from "@modules/updater/ContainerReporter";
+import { DockerCompose } from "@modules/updater/DockerCompose";
+import { FakeDocker } from "@modules/updater/test/FakeDocker";
 import request from "supertest";
 import type { Express } from "express";
 import { eq } from "drizzle-orm";
@@ -307,6 +312,191 @@ describe("AdminAPI", () => {
       const response = await request(server).get("/api/admin/deployments/not-a-uuid").set(await loginAs(testUser, ["admin"]));
 
       expect(response.status).toBe(403);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // containers (reported by the updater)
+  // ---------------------------------------------------------------------------
+  describe("containers", () => {
+    const containerService = new ContainerService();
+    const originalWait = containerService.logWaitMs;
+    let docker: FakeDocker;
+    let reporter: ContainerReporter;
+    // the reporter refreshes the status at the same time, so the last call is not necessarily the logs call
+    const logsCall = () => docker.calls.filter((call) => call.args.includes("logs")).at(-1);
+
+    beforeEach(async () => {
+      docker = new FakeDocker("0.0.3");
+      docker.serviceLogs.postgres = {
+        stdout: "2026-11-18T10:00:00.1Z database system is ready\n",
+        stderr: "2026-11-18T10:00:00.2Z checkpoint starting\n",
+      };
+      reporter = new ContainerReporter(
+        containerService,
+        new DockerCompose(docker, { projectDir: "/volume1/docker/todo-api", commandTimeoutMs: 1000 }),
+        { statusIntervalMs: 50, logPollIntervalMs: 10 },
+      );
+      // the snapshot the updater writes, without its loops running yet
+      await reporter.refreshStatus();
+      containerService.logWaitMs = 2000;
+    });
+
+    afterEach(async () => {
+      await reporter.stop();
+      containerService.logWaitMs = originalWait;
+    });
+
+    describe("GET /api/admin/containers", () => {
+      it("should return the status of all containers without internal details", async () => {
+        const response = await request(server).get("/api/admin/containers").set(await loginAs(testUser, ["user", "deployer"]));
+
+        expect(response.status).toBe(200);
+        expect(response.body.stale).toBe(false);
+        expect(Date.parse(response.body.updatedAt)).not.toBeNaN();
+        expect(response.body.containers).toEqual([
+          {
+            service: "postgres",
+            containerName: "todo-database",
+            image: "postgres:16-alpine",
+            state: "running",
+            health: "healthy",
+            statusText: "Up 2 hours (healthy)",
+            exitCode: 0,
+          },
+          expect.objectContaining({ service: "updater", health: null }),
+        ]);
+        // the labels of docker contain paths of the NAS, they are not stored and not returned
+        expect(JSON.stringify(response.body)).not.toContain("/volume1");
+      });
+
+      it("should say so when the updater does not report", async () => {
+        await db.delete(containerStatus);
+
+        const response = await request(server).get("/api/admin/containers").set(await loginAs(testUser, ["user", "deployer"]));
+
+        expect(response.body).toEqual({ updatedAt: null, stale: true, containers: [] });
+      });
+
+      it("should mark an old snapshot as stale", async () => {
+        await db.update(containerStatus).set({ updatedAt: new Date(Date.now() - STATUS_STALE_AFTER_MS - 1000) });
+
+        const response = await request(server).get("/api/admin/containers").set(await loginAs(testUser, ["user", "deployer"]));
+
+        expect(response.body.stale).toBe(true);
+        expect(response.body.containers).toHaveLength(2);
+      });
+
+      it("should let a user with the status permission only read it", async () => {
+        await authorizationService.assignRoleToUser(testUser.userId, "observer");
+
+        const response = await request(server).get("/api/admin/containers").set(await createAuthHeader(testUser));
+
+        expect(response.status).toBe(200);
+      });
+
+      it("should reject an admin without the role deployer", async () => {
+        const response = await request(server).get("/api/admin/containers").set(await loginAs(testUser, ["admin"]));
+
+        expect(response.status).toBe(403);
+      });
+    });
+
+    describe("GET /api/admin/containers/:service/logs", () => {
+      it("should return the logs the updater read, stdout and stderr merged in order", async () => {
+        reporter.start();
+
+        const response = await request(server)
+          .get("/api/admin/containers/postgres/logs?tail=50")
+          .set(await loginAs(testUser, ["user", "deployer"]));
+
+        expect(response.status).toBe(200);
+        expect(response.body).toMatchObject({
+          service: "postgres",
+          tail: 50,
+          logs: "2026-11-18T10:00:00.1Z database system is ready\n2026-11-18T10:00:00.2Z checkpoint starting",
+        });
+        expect(logsCall()?.args.slice(-3)).toEqual(["--tail", "50", "postgres"]);
+      });
+
+      it("should use 200 lines by default", async () => {
+        reporter.start();
+
+        await request(server).get("/api/admin/containers/postgres/logs").set(await loginAs(testUser, ["user", "deployer"]));
+
+        expect(logsCall()?.args.slice(-3)).toEqual(["--tail", "200", "postgres"]);
+      });
+
+      it("should not keep the logs in the database after they were returned", async () => {
+        reporter.start();
+
+        await request(server).get("/api/admin/containers/postgres/logs").set(await loginAs(testUser, ["user", "deployer"]));
+
+        expect(await db.select().from(containerLogRequests)).toHaveLength(0);
+      });
+
+      it("should answer 504 when the updater does not answer in time", async () => {
+        containerService.logWaitMs = 200;
+
+        const response = await request(server)
+          .get("/api/admin/containers/postgres/logs")
+          .set(await loginAs(testUser, ["user", "deployer"]));
+
+        expect(response.status).toBe(504);
+        expect(response.text).toBe("The updater did not answer in time");
+      });
+
+      it("should answer 502 with the reason when docker could not read the logs", async () => {
+        delete docker.serviceLogs.postgres;
+        reporter.start();
+
+        const response = await request(server)
+          .get("/api/admin/containers/postgres/logs")
+          .set(await loginAs(testUser, ["user", "deployer"]));
+
+        expect(response.status).toBe(502);
+        expect(response.text).toContain("no such service: postgres");
+      });
+
+      it("should answer 503 when the updater does not report the containers", async () => {
+        await db.delete(containerStatus);
+
+        const response = await request(server)
+          .get("/api/admin/containers/postgres/logs")
+          .set(await loginAs(testUser, ["user", "deployer"]));
+
+        expect(response.status).toBe(503);
+        expect(await db.select().from(containerLogRequests)).toHaveLength(0);
+      });
+
+      it("should answer 404 for a service that is not part of the compose project", async () => {
+        const response = await request(server)
+          .get("/api/admin/containers/someothercontainer/logs")
+          .set(await loginAs(testUser, ["user", "deployer"]));
+
+        expect(response.status).toBe(404);
+        expect(await db.select().from(containerLogRequests)).toHaveLength(0);
+      });
+
+      it.each([
+        ["an invalid service name", "/api/admin/containers/Bad%20Name/logs"],
+        ["a tail of 0", "/api/admin/containers/postgres/logs?tail=0"],
+        ["a tail above 1000", "/api/admin/containers/postgres/logs?tail=1001"],
+        ["a tail that is no number", "/api/admin/containers/postgres/logs?tail=all"],
+      ])("should answer 400 for %s", async (_name, url) => {
+        const response = await request(server).get(url).set(await loginAs(testUser, ["user", "deployer"]));
+
+        expect(response.status).toBe(400);
+      });
+
+      it("should require the logs permission, the status permission is not enough", async () => {
+        await authorizationService.assignRoleToUser(testUser.userId, "observer");
+
+        const response = await request(server).get("/api/admin/containers/postgres/logs").set(await createAuthHeader(testUser));
+
+        expect(response.status).toBe(403);
+        expect(response.text).toBe("Missing permissions: admin:docker:logs");
+      });
     });
   });
 });

@@ -1,8 +1,8 @@
 # Base configuration, safe for production (the NAS). For development add docker-compose.dev.yml:
 #   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d postgres   (see the docker:* npm scripts)
 #
-# The image tag comes from API_IMAGE_TAG. On the NAS it is set in .env.api, so start with
-#   docker compose --env-file .env.api up -d
+# The versions and the updater settings come from deploy.env (see deploy.env.example), so on the NAS start with
+#   docker compose --env-file deploy.env up -d
 services:
   postgres:
     image: postgres:16-alpine
@@ -33,8 +33,8 @@ services:
     restart: unless-stopped
 
   api:
-    # fixed version of the image, no implicit "latest". Update: change API_IMAGE_TAG, then docker compose pull && up -d
-    image: ghcr.io/cpietsch82/todo-api:${API_IMAGE_TAG:?API_IMAGE_TAG is not set, put it in .env.api and use --env-file .env.api}
+    # fixed version of the image, no implicit "latest". It is changed by the updater (admin api) or by hand in deploy.env
+    image: ghcr.io/cpietsch82/todo-api:${API_IMAGE_TAG:?API_IMAGE_TAG is not set, put it in deploy.env and use --env-file deploy.env}
     env_file:
       - .env.api
     environment:
@@ -53,4 +53,30 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    restart: unless-stopped
+
+  updater:
+    # Executes the docker operations of the admin api (pull, deploy and rollback, restart), only for the service api.
+    # It is the only container with access to docker, which means full control over the NAS: it has no ports and only
+    # runs fixed commands. The variables have defaults on purpose (no ":?"), compose resolves them for every command,
+    # also locally where the updater does not run; the updater itself refuses to start when the setup is incomplete.
+    image: ghcr.io/cpietsch82/todo-api-updater:${UPDATER_IMAGE_TAG:-set-UPDATER_IMAGE_TAG-in-deploy.env}
+    container_name: todo-updater
+    env_file:
+      # database connection and the other settings of the api (the updater uses the same code base)
+      - .env.api
+    environment:
+      UPDATER_PROJECT_DIR: ${UPDATER_PROJECT_DIR:-}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # this folder at the SAME absolute path as on the host, so the relative paths of this file (./postgres_data,
+      # ./api_logs) still point to the right folders when the updater runs docker compose
+      - .:${UPDATER_PROJECT_DIR:-/updater-project-dir-not-set}
+      # the docker login of the NAS, needed to pull the private images from GHCR (docker login ghcr.io)
+      - ${UPDATER_DOCKER_CONFIG:-/root/.docker/config.json}:/root/.docker/config.json:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # a running deploy is finished before the updater stops (it can take a few minutes)
+    stop_grace_period: 5m
     restart: unless-stopped

@@ -59,6 +59,15 @@ export const envSchema = z.object({
   LOGIN_RATE_LIMIT_WINDOW_MS: z.coerce.number().positive().default(15 * 60 * 1000),
   REGISTER_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(5),
   REGISTER_RATE_LIMIT_WINDOW_MS: z.coerce.number().positive().default(60 * 60 * 1000),
+  // ---- updater (only used by the updater container, see src/modules/updater) ----
+  // absolute path of the folder with docker-compose.yml and deploy.env, mounted at the same path as on the host
+  UPDATER_PROJECT_DIR: z.string().startsWith("/", "must be an absolute path").optional(),
+  // how often the updater looks for queued operations
+  UPDATER_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(5000),
+  // how long a started api container may take to become healthy before the deploy counts as failed
+  UPDATER_HEALTH_TIMEOUT_MS: z.coerce.number().int().positive().default(3 * 60 * 1000),
+  // maximum runtime of one docker command (a pull can take a while on a slow connection)
+  UPDATER_COMMAND_TIMEOUT_MS: z.coerce.number().int().positive().default(10 * 60 * 1000),
   // docker operations (pull, deploy, restart) that may be requested per IP
   DOCKER_OPERATION_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(10),
   DOCKER_OPERATION_RATE_LIMIT_WINDOW_MS: z.coerce.number().positive().default(15 * 60 * 1000),

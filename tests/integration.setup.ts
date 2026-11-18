@@ -3,7 +3,7 @@ import { beforeAll, afterAll, afterEach } from "vitest";
 import { Express } from "express";
 import { ExpressAPI } from "../src/modules/express/Express";
 import { db } from "@/db";
-import { todos, users, authentications, deployments } from "@/db/schema";
+import { todos, users, authentications, deployments, containerStatus, containerLogRequests } from "@/db/schema";
 
 let app: Express | null = null;
 let isInitialized = false;
@@ -46,6 +46,8 @@ export function getTestApp(): Express {
 export async function cleanupDatabase() {
   // deployments first: an operation left active by one test would block the next one (only one may be active)
   await db.delete(deployments);
+  await db.delete(containerStatus);
+  await db.delete(containerLogRequests);
   await db.delete(todos);
   await db.delete(authentications);
   await db.delete(users);

@@ -112,6 +112,25 @@ export class DeploymentService extends BaseModule {
   }
 
   /**
+   * Used by the updater when it starts: an operation that is still "running" was interrupted by a stop or crash of the
+   * updater. It is marked as failed, otherwise it would block every new operation forever.
+   * @returns the number of interrupted operations
+   */
+  async failInterruptedDeployments(): Promise<number> {
+    const interrupted = await db
+      .update(deployments)
+      .set({
+        status: "failed",
+        error: "The updater was stopped while the operation was running, check the state of the api container",
+        finishedAt: new Date(),
+      })
+      .where(eq(deployments.status, "running"))
+      .returning({ deploymentId: deployments.deploymentId });
+
+    return interrupted.length;
+  }
+
+  /**
    * Used by the updater: stores the result of a running operation.
    * @throws Error DEPLOYMENT_NOT_RUNNING when the operation is not running (anymore)
    */

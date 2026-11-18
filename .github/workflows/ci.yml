@@ -81,11 +81,17 @@ jobs:
             -t ghcr.io/${{ github.repository_owner }}/todo-api:dev \
             -t ghcr.io/${{ github.repository_owner }}/todo-api:dev-${GITHUB_SHA::7} \
             .
+          docker build --target updater \
+            -t ghcr.io/${{ github.repository_owner }}/todo-api-updater:dev \
+            -t ghcr.io/${{ github.repository_owner }}/todo-api-updater:dev-${GITHUB_SHA::7} \
+            .
 
       - name: Push Docker image
         run: |
           docker push ghcr.io/${{ github.repository_owner }}/todo-api:dev
           docker push ghcr.io/${{ github.repository_owner }}/todo-api:dev-${GITHUB_SHA::7}
+          docker push ghcr.io/${{ github.repository_owner }}/todo-api-updater:dev
+          docker push ghcr.io/${{ github.repository_owner }}/todo-api-updater:dev-${GITHUB_SHA::7}
 
   docker-production:
     runs-on: ubuntu-latest
@@ -128,8 +134,14 @@ jobs:
             -t ghcr.io/${{ github.repository_owner }}/todo-api:${{ needs.ci.outputs.version }} \
             -t ghcr.io/${{ github.repository_owner }}/todo-api:latest \
             .
+          docker build --target updater \
+            -t ghcr.io/${{ github.repository_owner }}/todo-api-updater:${{ needs.ci.outputs.version }} \
+            -t ghcr.io/${{ github.repository_owner }}/todo-api-updater:latest \
+            .
 
       - name: Push Docker image
         run: |
           docker push ghcr.io/${{ github.repository_owner }}/todo-api:${{ needs.ci.outputs.version }}
           docker push ghcr.io/${{ github.repository_owner }}/todo-api:latest
+          docker push ghcr.io/${{ github.repository_owner }}/todo-api-updater:${{ needs.ci.outputs.version }}
+          docker push ghcr.io/${{ github.repository_owner }}/todo-api-updater:latest
