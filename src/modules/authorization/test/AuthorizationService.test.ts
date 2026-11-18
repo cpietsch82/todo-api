@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { AuthorizationService } from "@modules/authorization/AuthorizationService";
 import { roles, userRoles } from "@modules/authorization/schema/authorization.schema";
-import { ROLE_PERMISSIONS } from "@modules/authorization/permissions";
+import { DOCKER_PERMISSIONS, ROLE_PERMISSIONS } from "@modules/authorization/permissions";
 import { NON_EXISTENT_UUID, generateUser } from "@tests/test.helpers";
 // registers the database cleanup hooks (users are removed after each test)
 import "@tests/integration.setup";
@@ -126,6 +126,59 @@ describe("AuthorizationService", () => {
 
     it("should fail for a non-existent user", async () => {
       await expect(service.getAuthorizationForUser(NON_EXISTENT_UUID)).rejects.toThrow();
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // getStoredAuthorization
+  // ---------------------------------------------------------------------------
+  describe("getStoredAuthorization", () => {
+    it("should return undefined for a user that does not exist", async () => {
+      expect(await service.getStoredAuthorization(NON_EXISTENT_UUID)).toBeUndefined();
+    });
+
+    it("should return no roles for a user without a role and not assign the default role", async () => {
+      const result = await service.getStoredAuthorization(testUser.userId);
+
+      expect(result).toEqual({ roles: [], permissions: [] });
+      expect(await getAssignedRoleNames(testUser.userId)).toEqual([]);
+    });
+
+    it("should resolve the docker permissions of the role deployer from the database", async () => {
+      await service.assignRoleToUser(testUser.userId, "deployer");
+
+      const result = await service.getStoredAuthorization(testUser.userId);
+
+      expect(result?.roles).toEqual(["deployer"]);
+      expect(result?.permissions).toHaveLength(DOCKER_PERMISSIONS.length);
+      expect(result?.permissions).toEqual(expect.arrayContaining([...DOCKER_PERMISSIONS]));
+    });
+
+    it("should not give the docker permissions to the role admin in the database", async () => {
+      await service.assignRoleToUser(testUser.userId, "admin");
+
+      const result = await service.getStoredAuthorization(testUser.userId);
+
+      expect(result?.permissions).toContain("admin:all");
+      for (const permission of DOCKER_PERMISSIONS) expect(result?.permissions).not.toContain(permission);
+    });
+
+    it("should match the role definitions of the code", async () => {
+      for (const role of ["user", "admin", "deployer"] as const) {
+        const user = await generateUser();
+        await service.assignRoleToUser(user.userId, role);
+
+        const result = await service.getStoredAuthorization(user.userId);
+
+        expect([...(result?.permissions ?? [])].sort()).toEqual([...ROLE_PERMISSIONS[role]].sort());
+      }
+    });
+
+    it("should reflect a revoked role immediately", async () => {
+      await service.assignRoleToUser(testUser.userId, "deployer");
+      await db.delete(userRoles).where(eq(userRoles.userId, testUser.userId));
+
+      expect(await service.getStoredAuthorization(testUser.userId)).toEqual({ roles: [], permissions: [] });
     });
   });
 });

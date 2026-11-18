@@ -6,6 +6,7 @@ node_modules
 .env.staging
 .env.database
 .env.api
+deploy.env
 dist/
 
 TODOS.txt

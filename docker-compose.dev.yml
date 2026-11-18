@@ -10,3 +10,11 @@ services:
     # the image is built from the local Dockerfile instead of being pulled from GHCR
     image: todo-api:${API_IMAGE_TAG:-local}
     build: .
+
+  updater:
+    # the updater is meant for the NAS, locally it only starts on demand: --profile updater
+    profiles: ["updater"]
+    image: todo-api-updater:${UPDATER_IMAGE_TAG:-local}
+    build:
+      context: .
+      target: updater

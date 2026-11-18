@@ -14,6 +14,28 @@ COPY drizzle ./drizzle
 RUN npm run build
 
 
+# ---------- Updater ----------
+# Executes the docker operations of the admin area (src/modules/updater). The only image with the docker cli, the
+# api image stays without it. Built with --target updater; it comes before "production", so that one stays the default.
+FROM node:24-alpine AS updater
+
+LABEL org.opencontainers.image.source="https://github.com/cpietsch82/todo-api"
+
+RUN apk add --no-cache docker-cli docker-cli-compose
+
+WORKDIR /app
+
+ENV NODE_ENV=production
+
+COPY package*.json ./
+RUN npm ci --omit=dev
+
+COPY --from=builder /app/dist ./dist
+
+# Runs as root, because the docker socket of the host belongs to root. The container has no ports.
+CMD ["node", "dist/src/modules/updater/index.js"]
+
+
 # ---------- Production ----------
 FROM node:24-alpine AS production
 
