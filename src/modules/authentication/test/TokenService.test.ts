@@ -181,7 +181,13 @@ describe("TokenService refresh tokens", () => {
     it("should keep only the newest tokens of a user and remove the oldest", async () => {
       const max = env.REFRESH_TOKEN_MAX_PER_USER;
       const tokens: string[] = [];
-      for (let i = 0; i < max + 2; i++) tokens.push(await service.generateRefreshToken(testUser.userId));
+      for (let i = 0; i < max + 2; i++) {
+        tokens.push(await service.generateRefreshToken(testUser.userId));
+        // PGlite stores created_at only with millisecond precision. Tokens of the same millisecond have no defined
+        // order, so "the oldest" would be random. Waiting keeps the timestamps distinct.
+        // TODO: replace by an ordered column in refresh_tokens (e.g. an identity column), then this wait can go
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
 
       expect(await getStoredTokens(testUser.userId)).toHaveLength(max);
       expect(await getByToken(tokens[0])).toBeUndefined();

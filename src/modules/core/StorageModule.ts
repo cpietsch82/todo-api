@@ -3,6 +3,8 @@ import { BaseModule } from "./BaseModule";
 import { db } from "@/db";
 import { eq } from "drizzle-orm";
 
+// FIXME: eventuell diese Klasse erstmal entfernen
+
 export class StorageModule<T extends TableConfig> extends BaseModule {
     protected collection: PgTableWithColumns<T>;
     protected idProperty: string;

@@ -69,6 +69,7 @@ Validated at startup in `env.ts` (the process exits when something is missing or
 | `TRUST_PROXY` | Number of reverse proxies in front of the API (default `0`). Needed so the rate limits use the real client IP; do not set it without a proxy |
 | `LOGIN_RATE_LIMIT_MAX` / `LOGIN_RATE_LIMIT_WINDOW_MS` | Failed login attempts per IP within the window (default `10` per 15 minutes) |
 | `REGISTER_RATE_LIMIT_MAX` / `REGISTER_RATE_LIMIT_WINDOW_MS` | Registrations per IP within the window (default `5` per hour) |
+| `DOCKER_OPERATION_RATE_LIMIT_MAX` / `DOCKER_OPERATION_RATE_LIMIT_WINDOW_MS` | Docker operations (pull, deploy, restart) per IP within the window (default `10` per 15 minutes) |
 | `EXPOSE_ERROR_DETAILS` | Developer flag (default `false`): responses contain the complete error message and stack trace of unexpected errors. The API refuses to start with it when `APP_STAGE=production` |
 | `RATE_LIMIT_PER_IP` / `RATE_LIMIT_WINDOW_MS` | Requests per IP (min. 100) within the time window |
 
@@ -105,10 +106,84 @@ All routes live under `/api`. Everything except the routes marked as public requ
 | `/todos` | CRUD for todos (owner or admin) |
 | `/todo-comments` | CRUD for todo comments (owner or admin) |
 | `/users` | List, read, update and delete users (own user or admin) |
-| `/admin` | Admin only, no routes yet |
+| `/admin` | Only for the roles `admin` and `deployer`, see [Docker operations](#docker-operations) |
 
-Permissions (`todos:read`, `users:delete`, ...) are defined in `src/modules/authorization/permissions.ts`;
-`admin:all` grants every permission.
+Permissions (`todos:read`, `users:delete`, ...) are defined in `src/modules/authorization/permissions.ts`.
+
+| Role | Permissions |
+|---|---|
+| `user` | Own todos, comments and profile (default role of every account) |
+| `admin` | `admin:all` and `users:list`. `admin:all` grants every permission **except** the docker ones |
+| `deployer` | Only the docker operations: `admin:docker:status`, `admin:docker:logs`, `admin:docker:pull`, `admin:docker:deploy`, `admin:docker:restart` |
+
+Controlling docker gives full control over the NAS, so these permissions are never covered by `admin:all` and have
+to be granted with the role `deployer` (roles are combined, a deployer usually also has the role `user` or `admin`).
+Assign it in the database, e.g. with Adminer:
+
+```sql
+INSERT INTO user_roles (user_id, role_id)
+SELECT u.user_id, r.role_id FROM users u, roles r WHERE u.email = '<email>' AND r.name = 'deployer';
+```
+
+Routes of the admin area check the permissions against the database on every request (`requireFreshPermissions`),
+so a revoked role takes effect immediately and not only when the access token expires.
+
+### Docker operations
+
+The api never talks to docker itself. Operations that change the containers (`pull` and `deploy` of an api version,
+`restart` of the api) are queued in the table `deployments` (`src/modules/admin/DeploymentService.ts`), a separate
+updater container will execute them one after another. Only one operation can be queued or running at a time, which
+the database enforces with a unique index. Only released versions (`1.2.3`) can be pulled or deployed.
+
+| Route | Permission | Description |
+|---|---|---|
+| `GET /api/admin/version` | `admin:docker:status` | Version of the running api |
+| `GET /api/admin/deployments?limit=20` | `admin:docker:status` | History of the operations, newest first, without output (`limit` 1-100) |
+| `GET /api/admin/deployments/:deploymentId` | `admin:docker:status` | One operation including the end of its command output |
+| `POST /api/admin/deployments/pull` | `admin:docker:pull` | Body `{ "tag": "1.2.3" }`, pulls the api image of that version |
+| `POST /api/admin/deployments/deploy` | `admin:docker:deploy` | Body `{ "tag": "1.2.3" }`, switches the api to that version (update and rollback) |
+| `POST /api/admin/deployments/restart` | `admin:docker:restart` | No body, restarts the api container |
+| `GET /api/admin/containers` | `admin:docker:status` | Status of all containers of the compose project (state, health, image), with `updatedAt` and `stale` |
+| `GET /api/admin/containers/:service/logs?tail=200` | `admin:docker:logs` | The last lines (`tail` 1-1000) of the log of one service, stdout and stderr merged in order |
+
+The `POST` routes answer `202` with the queued operation and its status url in the `Location` header, `409` while
+another operation is queued or running, and are limited per IP (`DOCKER_OPERATION_RATE_LIMIT_MAX`). Follow the
+status with `GET` on that url until it is `succeeded`, `failed` or `rolled_back`.
+
+#### Status and logs of the containers
+
+The api cannot see the containers itself, the updater reports them:
+
+- **Status:** every 15 seconds the updater stores a snapshot of all containers of the compose project (`docker compose
+  ps --all`) in the table `container_status`. `GET /api/admin/containers` returns it with `updatedAt`; `stale: true`
+  means the snapshot is older than 60 seconds or missing, so the updater does not run (or cannot reach docker).
+- **Logs:** `GET /api/admin/containers/:service/logs` stores a request, the updater answers it within about a second
+  (`docker compose logs --tail N <service>`), and the api returns the lines directly. `503` while the updater does not
+  report, `404` for a service that is not part of the compose project, `504` when the updater does not answer within
+  15 seconds, `502` when docker could not read the logs. The logs are deleted from the database as soon as they were
+  returned. Note that the logs of Postgres can contain data of failed queries, so `admin:docker:logs` should only be
+  given to people who may see the data.
+- Both run next to the operations, so status and logs stay available during a long deploy.
+
+#### The updater
+
+The operations are executed by the **updater** (`src/modules/updater`, image `todo-api-updater`, compose service
+`updater`), the only container with access to docker. It runs fixed `docker compose` commands for the service `api`
+only, never through a shell, and never touches Postgres or itself.
+
+| Operation | What the updater does |
+|---|---|
+| `pull` | `docker compose pull api` with the tag, the running api is not touched |
+| `deploy` | pulls the tag, writes it to `deploy.env`, recreates only the api (`up -d --no-deps api`) and waits until it is healthy. If it does not become healthy (or stops), the previous tag is started again: status `rolled_back`. If that fails too: `failed` |
+| `restart` | `docker compose restart api` and waits until it is healthy |
+
+- The version of the api lives in `deploy.env` (`API_IMAGE_TAG`), the updater changes only this line.
+  The version of the updater itself (`UPDATER_IMAGE_TAG`) is only changed by hand, the updater never updates itself.
+- A deploy whose new version did not become healthy within `UPDATER_HEALTH_TIMEOUT_MS` (default 3 minutes) is rolled back.
+- If the updater is stopped while an operation runs, it marks the operation as `failed` on its next start, so it does not
+  block new ones. `docker compose stop` waits up to 5 minutes (`stop_grace_period`) for a running operation.
+- **Rollbacks across migrations:** migrations only run forwards. A rollback to a version from before a migration can
+  fail if that migration changed existing tables, so check the migrations between the two versions before.
 
 ## Docker
 
@@ -129,18 +204,25 @@ The `npm run docker:*` scripts always use both files.
 - `npm run docker:adminer` starts Adminer on `http://localhost:8080` (server `postgres`, user and password from `.env.database`).
 
 ### Production (NAS)
-- Copy `docker-compose.yml`, `.env.api` and `.env.database` to the NAS (not `docker-compose.dev.yml` and not the
-  development `.env`). The image `ghcr.io/cpietsch82/todo-api` is private, so run `docker login ghcr.io` once with an
-  access token that has `read:packages`.
-- The version of the API image is `API_IMAGE_TAG` in `.env.api`. Docker Compose reads variables for the compose file
+- Copy `docker-compose.yml`, `.env.api`, `.env.database` and `deploy.env` (from `deploy.env.example`) to the NAS
+  (not `docker-compose.dev.yml` and not the development `.env`). The images `ghcr.io/cpietsch82/todo-api` and
+  `ghcr.io/cpietsch82/todo-api-updater` are private, so run `docker login ghcr.io` once as root with an access token that
+  has `read:packages`. The updater uses this login (`UPDATER_DOCKER_CONFIG`) to pull new api versions.
+- `deploy.env` holds the versions and the updater settings. Docker Compose reads variables for the compose file only
   from the `--env-file`, not from the `env_file` of a service, so start every command with it:
-  `docker compose --env-file .env.api up -d` (alternatively `export COMPOSE_ENV_FILES=.env.api`). Without a tag the
-  command stops with a clear message, there is no implicit `latest`.
-- **Update:** release a new version (the CI pushes the image), set the new `API_IMAGE_TAG` in `.env.api`, then
-  `docker compose --env-file .env.api pull && docker compose --env-file .env.api up -d`.
-  **Rollback:** set the old tag and run the same commands.
-- **Adminer** is only started on demand: `docker compose --env-file .env.api --profile tools up -d adminer`, and stopped
-  afterwards with `docker compose --env-file .env.api stop adminer`. Open it through an SSH tunnel, e.g.
+  `docker compose --env-file deploy.env up -d` (alternatively `export COMPOSE_ENV_FILES=deploy.env`). Without
+  `API_IMAGE_TAG` the command stops with a clear message, there is no implicit `latest`. An `API_IMAGE_TAG` line in
+  `.env.api` from an older setup is not used anymore and can be removed.
+- `UPDATER_PROJECT_DIR` must be the absolute path of the folder with the compose file on the NAS. The updater mounts the
+  folder at exactly this path, otherwise the relative paths (`./postgres_data`, `./api_logs`) would point to wrong
+  folders when it recreates the api. Run the compose commands from this folder and without `-p`, so the updater uses the
+  same compose project name (the folder name).
+- **Update / rollback:** through the admin api (`POST /api/admin/deployments/deploy`), or by hand: set `API_IMAGE_TAG`
+  in `deploy.env`, then `docker compose --env-file deploy.env pull api && docker compose --env-file deploy.env up -d api`.
+- **Update of the updater:** set `UPDATER_IMAGE_TAG` in `deploy.env`, then
+  `docker compose --env-file deploy.env pull updater && docker compose --env-file deploy.env up -d updater`.
+- **Adminer** is only started on demand: `docker compose --env-file deploy.env --profile tools up -d adminer`, and stopped
+  afterwards with `docker compose --env-file deploy.env stop adminer`. Open it through an SSH tunnel, e.g.
   `ssh -L 8080:127.0.0.1:8080 user@nas`, then visit `http://localhost:8080`.
 - The data of Postgres (`./postgres_data`) and the logs of the API (`./api_logs`) are bind mounts, so they are normal
   folders next to the compose file. The API runs as the user `node` (uid 1000), so `api_logs` must be writable for it
@@ -151,6 +233,9 @@ The `npm run docker:*` scripts always use both files.
   (`3000`) is. The API reaches Postgres through the compose network.
 - **API container:** runs as the unprivileged user `node`, without Linux capabilities and with `no-new-privileges`.
   The image has a `HEALTHCHECK` on `/api/health`, so `docker ps` shows whether the API is healthy.
+- **Updater container:** has the docker socket, which means full control over the NAS. It runs as root (the socket
+  belongs to root), has no ports, runs only the fixed commands above and is started locally only with
+  `--profile updater`.
 
 ### Logs
 
@@ -222,7 +307,7 @@ todo-api/
 │   │   ├── express/                # ExpressAPI (app setup, routing, response helpers), VersionService
 │   │   ├── authentication/         # Register, login, JWT, persistent refresh tokens and their cleanup job
 │   │   ├── authorization/          # Roles, permissions and their resolution per user
-│   │   ├── admin/                  # Admin API (guarded by admin:all, no routes yet)
+│   │   ├── admin/                  # Admin API (roles admin/deployer) and the queue of the docker operations
 │   │   ├── users/
 │   │   └── todos/                  # Todos and todo comments
 │   │       ├── schema/             # Drizzle tables and Zod schemas
