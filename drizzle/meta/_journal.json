@@ -64,6 +64,13 @@
       "when": 1793653191375,
       "tag": "0008_add_deployer_role",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1793653192375,
+      "tag": "0009_create_deployments",
+      "breakpoints": true
     }
   ]
 }

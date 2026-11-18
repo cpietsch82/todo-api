@@ -127,6 +127,14 @@ SELECT u.user_id, r.role_id FROM users u, roles r WHERE u.email = '<email>' AND 
 Routes of the admin area check the permissions against the database on every request (`requireFreshPermissions`),
 so a revoked role takes effect immediately and not only when the access token expires.
 
+### Docker operations (in progress)
+
+The api never talks to docker itself. Operations that change the containers (`pull` and `deploy` of an api version,
+`restart` of the api) are queued in the table `deployments` (`src/modules/admin/DeploymentService.ts`), a separate
+updater container will execute them one after another. Only one operation can be queued or running at a time, which
+the database enforces with a unique index. Only released versions (`1.2.3`) can be pulled or deployed. The routes and
+the updater are not built yet.
+
 ## Docker
 
 There are two compose files, so development and production stay strictly separated:
@@ -239,7 +247,7 @@ todo-api/
 │   │   ├── express/                # ExpressAPI (app setup, routing, response helpers), VersionService
 │   │   ├── authentication/         # Register, login, JWT, persistent refresh tokens and their cleanup job
 │   │   ├── authorization/          # Roles, permissions and their resolution per user
-│   │   ├── admin/                  # Admin API (guarded by admin:all, no routes yet)
+│   │   ├── admin/                  # Admin API (roles admin/deployer) and the queue of the docker operations
 │   │   ├── users/
 │   │   └── todos/                  # Todos and todo comments
 │   │       ├── schema/             # Drizzle tables and Zod schemas
