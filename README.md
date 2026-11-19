@@ -104,8 +104,13 @@ All routes live under `/api`. Everything except the routes marked as public requ
 | `GET /version` | Name, version, stage and commit of the running API (public) |
 | `POST /auth/register`, `/auth/login`, `/auth/refresh` | Registration, login and token rotation (public) |
 | `POST /auth/logout` | Revokes the given refresh token |
-| `/todos` | CRUD for todos (owner or admin) |
-| `/todo-comments` | CRUD for todo comments (owner or admin) |
+| `/todos` | CRUD for todos. Reading needs access to the todo, changing and deleting is for its creator (or admin) |
+| `/todo-comments` | CRUD for todo comments. Writing needs access to the commented todo, reading, changing and deleting is for the author (or admin) |
+
+Who may see a todo is decided in one place, `TodoService.canAccessTodo` (today: its creator and admins). Reading a
+todo and commenting on it both use it through the middleware `requireTodoAccess`, so sharing todos later only has to
+extend that rule. The parts for a discussion on shared todos (`getCommentsForTodo`, `canDeleteComment`) are prepared
+in `TodoCommentService` and marked with `TODO(discussion)`.
 | `/users` | List, read, update and delete users (own user or admin) |
 | `/admin` | Only for the roles `admin` and `deployer`, see [Docker operations](#docker-operations) |
 
