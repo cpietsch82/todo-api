@@ -22,7 +22,7 @@ export class TodoService extends BaseModule {
     return TodoService.instance;
   }
 
-  public async getAllTodos(userId?: string): Promise<Todo[]> {
+  async getAllTodos(userId?: string): Promise<Todo[]> {
     const query = db.select().from(todos);
 
     if (userId) {
@@ -32,7 +32,7 @@ export class TodoService extends BaseModule {
     return query.orderBy(desc(todos.createdAt));
   }
 
-  public async getTodoById(todoId: string): Promise<Todo | undefined> {
+  async getTodoById(todoId: string): Promise<Todo | undefined> {
     const [todo] = await db.select().from(todos).where(eq(todos.todoId, todoId)).limit(1);
 
     return todo;
@@ -46,7 +46,7 @@ export class TodoService extends BaseModule {
    * Today a todo is only visible to its creator and to admins. It is async on purpose: the extension for sharing
    * will need a database query.
    */
-  public async canAccessTodo(todo: Pick<Todo, "userId">, user: AccessingUser): Promise<boolean> {
+  async canAccessTodo(todo: Pick<Todo, "userId">, user: AccessingUser): Promise<boolean> {
     if (hasPermission(user.permissions, "admin:all")) return true;
 
     // TODO(sharing): also allow the users a todo or its list is shared with, as soon as todos/lists can be shared
@@ -54,13 +54,13 @@ export class TodoService extends BaseModule {
     return todo.userId === user.id;
   }
 
-  public async createTodo(data: NewTodo): Promise<Todo> {
+  async createTodo(data: NewTodo): Promise<Todo> {
     const [todo] = await db.insert(todos).values(data).returning();
 
     return todo;
   }
 
-  public async updateTodo(todoId: string, updateData: UpdateTodo): Promise<Todo> {
+  async updateTodo(todoId: string, updateData: UpdateTodo): Promise<Todo> {
     const [todo] = await db
       .update(todos)
       .set({
@@ -73,7 +73,7 @@ export class TodoService extends BaseModule {
     return todo;
   }
 
-  public async deleteTodo(todoId: string): Promise<Todo> {
+  async deleteTodo(todoId: string): Promise<Todo> {
     const [todo] = await db.delete(todos).where(eq(todos.todoId, todoId)).returning();
 
     return todo;

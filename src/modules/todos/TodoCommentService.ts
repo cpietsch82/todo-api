@@ -30,15 +30,15 @@ export class TodoCommentService extends BaseModule {
     return TodoCommentService.instance;
   }
 
-  public async getAllTodoComments(): Promise<TodoComment[]> {
+  async getAllTodoComments(): Promise<TodoComment[]> {
     return db.select().from(todoComments).orderBy(desc(todoComments.createdAt));
   }
 
-  public async getAllTodoCommentsForUser(userId: string): Promise<TodoComment[]> {
+  async getAllTodoCommentsForUser(userId: string): Promise<TodoComment[]> {
     return db.select().from(todoComments).where(eq(todoComments.userId, userId)).orderBy(desc(todoComments.createdAt));
   }
 
-  public async getTodoCommentById(commentId: string): Promise<TodoComment | undefined> {
+  async getTodoCommentById(commentId: string): Promise<TodoComment | undefined> {
     const [todoComment] = await db.select().from(todoComments).where(eq(todoComments.commentId, commentId)).limit(1);
     return todoComment;
   }
@@ -50,7 +50,7 @@ export class TodoCommentService extends BaseModule {
    * TODO(discussion): not used yet. Will serve GET /api/todos/:todoId/comments (guarded by requireTodoAccess) once
    * todos can be shared. Today GET /todo-comments only returns the own comments, so the others would not see them.
    */
-  public async getCommentsForTodo(todoId: string): Promise<TodoDiscussionComment[]> {
+  async getCommentsForTodo(todoId: string): Promise<TodoDiscussionComment[]> {
     const rows = await db
       .select({
         commentId: todoComments.commentId,
@@ -80,17 +80,17 @@ export class TodoCommentService extends BaseModule {
    * TODO(discussion): not used yet. Will replace requireTodoCommentOwnership on DELETE /api/todo-comments/:commentId
    * once other users can comment on a todo; today all comments of a todo come from its creator (or an admin).
    */
-  public canDeleteComment(comment: Pick<TodoComment, "userId">, todo: Pick<Todo, "userId">, user: AccessingUser): boolean {
+  canDeleteComment(comment: Pick<TodoComment, "userId">, todo: Pick<Todo, "userId">, user: AccessingUser): boolean {
     if (hasPermission(user.permissions, "admin:all")) return true;
     return comment.userId === user.id || todo.userId === user.id;
   }
 
-  public async createTodoComment(data: NewTodoComment): Promise<TodoComment> {
+  async createTodoComment(data: NewTodoComment): Promise<TodoComment> {
     const [todoComment] = await db.insert(todoComments).values(data).returning();
     return todoComment;
   }
 
-  public async updateTodoComment(commentId: string, updateData: UpdateTodoComment): Promise<TodoComment> {
+  async updateTodoComment(commentId: string, updateData: UpdateTodoComment): Promise<TodoComment> {
     const [todoComment] = await db
       .update(todoComments)
       .set(updateData)
@@ -100,7 +100,7 @@ export class TodoCommentService extends BaseModule {
     return todoComment;
   }
 
-  public async deleteTodoComment(commentId: string): Promise<TodoComment> {
+  async deleteTodoComment(commentId: string): Promise<TodoComment> {
     const [todoComment] = await db.delete(todoComments).where(eq(todoComments.commentId, commentId)).returning();
     return todoComment;
   }
