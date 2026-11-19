@@ -1,5 +1,5 @@
 import { BaseModule } from "../core/BaseModule";
-import { type User } from "@/modules/users/schema/user.schema";
+import { users, type User } from "@/modules/users/schema/user.schema";
 import { AuthorizationService, type RoleDefinition } from "@/modules/authorization/AuthorizationService";
 import type { AuthorizationClaims, Permission, RoleName } from "@/modules/authorization/permissions";
 import { UserService } from "../users/UserService";
@@ -61,16 +61,13 @@ export class AdminService extends BaseModule {
 
   /** All users, ordered by username, each with roles and permissions. */
   async listUsers(): Promise<AdminUser[]> {
-    // const rows = await db.select().from(users).orderBy(asc(users.username));
-    const rows = await this.userService.getAllUsers();
+    const rows = await this.userService.getAllUsers(users.username);
     const claims = await this.authorizationService.readAuthorizations(rows.map((row) => row.userId));
 
     return rows.map((row) => toAdminUser(row, claims.get(row.userId)));
   }
 
   async getUser(userId: string): Promise<AdminUser | undefined> {
-    // const [row] = await db.select().from(users).where(eq(users.userId, userId)).limit(1);
-    // if (!row) return undefined;
     const user = await this.userService.getUserById(userId);
     if (!user) return undefined;
 

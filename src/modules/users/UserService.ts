@@ -1,5 +1,5 @@
 import { db } from "@/db";
-import { asc, eq } from "drizzle-orm";
+import { AnyColumn, asc, eq, SQLWrapper } from "drizzle-orm";
 import { BaseModule } from "../core/BaseModule";
 import { users, type NewUser, type UpdateUser, type User } from "./schema/user.schema";
 
@@ -27,8 +27,8 @@ export class UserService extends BaseModule {
     return user;
   }
 
-  async getAllUsers(): Promise<User[]> {
-    const rows = await db.select().from(users).orderBy(asc(users.createdAt));
+  async getAllUsers(sortBy: SQLWrapper | AnyColumn = users.createdAt): Promise<User[]> {
+    const rows = await db.select().from(users).orderBy(asc(sortBy));
 
     return rows;
   }
