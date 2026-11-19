@@ -9,12 +9,12 @@ import { requirePermissions, requireUserOwnership } from "@/middleware/permissio
 
 export class UserAPI extends APIModule {
   public static instance: UserAPI;
-  protected service: UserService;
+  protected userService: UserService;
 
   constructor() {
     super("user.api", "API Module for User management", "/users");
 
-    this.service = new UserService();
+    this.userService = new UserService();
 
     if (!UserAPI.instance) {
       UserAPI.instance = this;
@@ -51,7 +51,7 @@ export class UserAPI extends APIModule {
   }
 
   private async getAllUsers(_req: Request, res: Response) {
-    const users = await this.service.getAllUsers();
+    const users = await this.userService.getAllUsers();
 
     res.json(users);
   }
@@ -59,7 +59,7 @@ export class UserAPI extends APIModule {
   private async getUserById(req: TypedRequestParams<UserByIdParams>, res: Response) {
     const { userId } = req.params;
 
-    const user = await this.service.getUserById(userId);
+    const user = await this.userService.getUserById(userId);
     if (!user) return res.respondNotFound();
 
     res.json(user);
@@ -69,10 +69,10 @@ export class UserAPI extends APIModule {
     const { updates } = req.body;
     const { userId } = req.params;
 
-    const existingUser = await this.service.getUserById(userId);
+    const existingUser = await this.userService.getUserById(userId);
     if (!existingUser) return res.respondNotFound();
 
-    const result = await this.service.updateUser(userId, updates);
+    const result = await this.userService.updateUser(userId, updates);
 
     res.json(result);
   }
@@ -80,10 +80,10 @@ export class UserAPI extends APIModule {
   private async deleteUser(req: TypedRequestParams<UserByIdParams>, res: Response) {
     const { userId } = req.params;
 
-    const existingUser = await this.service.getUserById(userId);
+    const existingUser = await this.userService.getUserById(userId);
     if (!existingUser) return res.respondNotFound();
 
-    const result = await this.service.deleteUser(userId);
+    const result = await this.userService.deleteUser(userId);
 
     res.json(result);
   }

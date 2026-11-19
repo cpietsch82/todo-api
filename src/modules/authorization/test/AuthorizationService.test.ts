@@ -181,4 +181,113 @@ describe("AuthorizationService", () => {
       expect(await service.getStoredAuthorization(testUser.userId)).toEqual({ roles: [], permissions: [] });
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // readAuthorizations
+  // ---------------------------------------------------------------------------
+  describe("readAuthorizations", () => {
+    it("should read roles and permissions of several users at once", async () => {
+      const other = await generateUser();
+      await service.assignRoleToUser(testUser.userId, "user");
+      await service.assignRoleToUser(testUser.userId, "admin");
+      await service.assignRoleToUser(other.userId, "deployer");
+
+      const result = await service.readAuthorizations([testUser.userId, other.userId]);
+
+      expect(result.get(testUser.userId)?.roles.sort()).toEqual(["admin", "user"]);
+      expect(result.get(testUser.userId)?.permissions.sort()).toEqual(
+        [...new Set([...ROLE_PERMISSIONS.user, ...ROLE_PERMISSIONS.admin])].sort(),
+      );
+      expect(result.get(other.userId)).toEqual({ roles: ["deployer"], permissions: expect.arrayContaining([...DOCKER_PERMISSIONS]) });
+    });
+
+    it("should return empty lists for a user without a role and not assign the default role", async () => {
+      const result = await service.readAuthorizations([testUser.userId]);
+
+      expect(result.get(testUser.userId)).toEqual({ roles: [], permissions: [] });
+      expect(await getAssignedRoleNames(testUser.userId)).toEqual([]);
+    });
+
+    it("should return an empty map for no users", async () => {
+      expect((await service.readAuthorizations([])).size).toBe(0);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // listRoles
+  // ---------------------------------------------------------------------------
+  describe("listRoles", () => {
+    it("should list the roles with the permissions of the code, ordered by name", async () => {
+      const result = await service.listRoles();
+      const names = result.map((role) => role.name);
+
+      expect(names).toEqual([...names].sort());
+      for (const role of ["user", "admin", "deployer"] as const) {
+        expect(result.find((entry) => entry.name === role)?.permissions).toEqual([...ROLE_PERMISSIONS[role]].sort());
+      }
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // replaceUserRoles (the http status codes are tested in AdminAPI.users.test.ts)
+  // ---------------------------------------------------------------------------
+  describe("replaceUserRoles", () => {
+    let admin: User;
+
+    beforeEach(async () => {
+      admin = await generateUser();
+      await service.assignRoleToUser(admin.userId, "admin");
+      await service.assignRoleToUser(testUser.userId, "user");
+    });
+
+    it("should replace all roles of the user", async () => {
+      await service.replaceUserRoles({ userId: testUser.userId, roles: ["admin", "admin"], actorId: admin.userId });
+
+      expect(await getAssignedRoleNames(testUser.userId)).toEqual(["admin"]);
+    });
+
+    it.each([
+      ["no role", [], 400],
+      ["an unknown role", ["user", "superuser"], 400],
+      ["the role deployer granted by an admin who is no deployer", ["user", "deployer"], 403],
+    ])("should reject %s and change nothing", async (_name, roleNames, status) => {
+      await expect(
+        service.replaceUserRoles({ userId: testUser.userId, roles: roleNames, actorId: admin.userId }),
+      ).rejects.toMatchObject({ status });
+      expect(await getAssignedRoleNames(testUser.userId)).toEqual(["user"]);
+    });
+
+    it("should answer 404 for an unknown user", async () => {
+      await expect(
+        service.replaceUserRoles({ userId: NON_EXISTENT_UUID, roles: ["user"], actorId: admin.userId }),
+      ).rejects.toMatchObject({ status: 404 });
+    });
+
+    it("should not let an admin remove their own role admin", async () => {
+      await expect(
+        service.replaceUserRoles({ userId: admin.userId, roles: ["user"], actorId: admin.userId }),
+      ).rejects.toMatchObject({ status: 409 });
+      expect(await getAssignedRoleNames(admin.userId)).toEqual(["admin"]);
+    });
+
+    it("should keep the role admin of the last admin", async () => {
+      // the actor is no admin, so only the rule of the last admin can stop it (the api gate would reject earlier)
+      const deployer = await generateUser();
+      await service.assignRoleToUser(deployer.userId, "deployer");
+
+      await expect(
+        service.replaceUserRoles({ userId: admin.userId, roles: ["user"], actorId: deployer.userId }),
+      ).rejects.toMatchObject({ status: 409, message: "The last admin cannot lose the role admin" });
+    });
+
+    it("should let a deployer grant and revoke the role deployer", async () => {
+      await service.assignRoleToUser(admin.userId, "deployer");
+
+      await service.replaceUserRoles({ userId: testUser.userId, roles: ["user", "deployer"], actorId: admin.userId });
+      expect((await getAssignedRoleNames(testUser.userId)).sort()).toEqual(["deployer", "user"]);
+
+      await service.replaceUserRoles({ userId: testUser.userId, roles: ["user"], actorId: admin.userId });
+      expect(await getAssignedRoleNames(testUser.userId)).toEqual(["user"]);
+    });
+  });
 });

@@ -17,12 +17,12 @@ import { typedHandler } from "@/utils/typedHandler";
 
 export class TodoAPI extends APIModule {
   private static instance: TodoAPI;
-  private service: TodoService;
+  private todoService: TodoService;
 
   constructor() {
     super("todo.api", "API Module for Todo CRUD operations", "/todos");
 
-    this.service = new TodoService();
+    this.todoService = new TodoService();
 
     if (!TodoAPI.instance) {
       TodoAPI.instance = this;
@@ -64,7 +64,7 @@ export class TodoAPI extends APIModule {
   }
 
   private async getAllTodos(req: Request, res: Response) {
-    const todos = await this.service.getAllTodos(req.user?.id);
+    const todos = await this.todoService.getAllTodos(req.user?.id);
     res.json(todos);
   }
 
@@ -74,7 +74,7 @@ export class TodoAPI extends APIModule {
   private async getTodoById(req: TypedRequestParams<TodoByIdParams>, res: Response) {
     const { todoId } = req.params;
 
-    const todo = await this.service.getTodoById(todoId);
+    const todo = await this.todoService.getTodoById(todoId);
     if (!todo) return res.respondNotFound();
     res.json(todo);
   }
@@ -91,7 +91,7 @@ export class TodoAPI extends APIModule {
       userId: req.user?.id, // TODO: überlegen, ob hier dann eine RequestingEntity sinnvoll wäre!
     };
 
-    const todo = await this.service.createTodo(newTodo as Todo);
+    const todo = await this.todoService.createTodo(newTodo as Todo);
     res.status(201).json(todo);
   }
 
@@ -100,17 +100,17 @@ export class TodoAPI extends APIModule {
     const { updates } = req.body;
     // TODO: überprüfen, ob ich das hier überhaupt brauche, wenn ich ein Update auf eine Id machen will, die nicht existiert!
     // Denn somit könnte ich mir dann einen DB Call sparen!
-    const todo = await this.service.getTodoById(todoId);
+    const todo = await this.todoService.getTodoById(todoId);
     if (!todo) return res.respondNotFound();
 
-    const updatedTodo = await this.service.updateTodo(todoId, updates);
+    const updatedTodo = await this.todoService.updateTodo(todoId, updates);
     res.status(201).json(updatedTodo);
   }
 
   private async deleteTodo(req: TypedRequestParams<TodoByIdParams>, res: Response) {
     const { todoId } = req.params;
 
-    const deletedTodo = await this.service.deleteTodo(todoId);
+    const deletedTodo = await this.todoService.deleteTodo(todoId);
     res.json(deletedTodo);
   }
 }

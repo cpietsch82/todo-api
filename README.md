@@ -86,6 +86,7 @@ the API container reads `.env.api`.
 | `npm run test:coverage` | Run the tests with coverage |
 | `npm run lint` / `lint:fix` | Lint the code |
 | `npm run db:generate` / `db:migrate` / `db:push` / `db:studio` | Drizzle Kit commands |
+| `npm run user:create -- --email … --username … --role admin` | Create a user or add roles, see [roles](#api-overview) |
 | `npm run docker:db` / `docker:up` / `docker:adminer` | Start only Postgres / the whole stack with a locally built API image / Adminer (development) |
 | `npm run docker:down` / `docker:logs` / `docker:restart` / `docker:reset` | Stop the services / follow the Postgres logs / restart Postgres / recreate the containers (does not delete `postgres_data`) |
 
@@ -118,12 +119,26 @@ Permissions (`todos:read`, `users:delete`, ...) are defined in `src/modules/auth
 
 Controlling docker gives full control over the NAS, so these permissions are never covered by `admin:all` and have
 to be granted with the role `deployer` (roles are combined, a deployer usually also has the role `user` or `admin`).
-Assign it in the database, e.g. with Adminer:
+Roles are assigned with the script `src/scripts/createUser.ts`. It creates a user (e.g. the first admin of an empty
+database) or adds roles to an existing user. The password is asked for twice without being shown; without a terminal
+(`exec -T`) it is read from the first line of stdin. Every user gets the role `user`.
 
-```sql
-INSERT INTO user_roles (user_id, role_id)
-SELECT u.user_id, r.role_id FROM users u, roles r WHERE u.email = '<email>' AND r.name = 'deployer';
+```bash
+# production: in the running api container
+docker compose --env-file deploy.env exec api node dist/src/scripts/createUser.js \
+  --email admin@example.com --username admin --role admin --role deployer
+
+# an existing user only gets the roles, the password stays unchanged
+docker compose --env-file deploy.env exec api node dist/src/scripts/createUser.js --email someone@example.com --role deployer
+
+# development
+npm run user:create -- --email admin@example.com --username admin --role admin
 ```
+
+Options: `--email` (required), `--username` (required for a new user), `--first-name`, `--last-name`,
+`--role` (repeatable or comma separated), `--help`. The same rules as the registration apply (valid e-mail,
+password with at least 8 characters). A user who is logged in has to log in again to get the new roles into the
+access token.
 
 Routes of the admin area check the permissions against the database on every request (`requireFreshPermissions`),
 so a revoked role takes effect immediately and not only when the access token expires.
@@ -314,6 +329,7 @@ todo-api/
 │   │       ├── test/               # Tests of the module
 │   │       ├── TodoAPI.ts          # Routes
 │   │       └── TodoService.ts      # Business logic
+│   ├── scripts/                    # Command line scripts, e.g. createUser (users and roles)
 │   ├── utils/                      # logger, passwords, typedHandler, ErrorWithCode
 │   └── index.ts                    # Application entry point
 ├── tests/                          # Test setup (PGlite database, Express app) and helpers

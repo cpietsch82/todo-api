@@ -1,7 +1,12 @@
 export type UserRole = "user" | "admin" | "deployer";
 export type RoleName = string;
 
-// Operations on the docker containers of the NAS. Status and logs cover all containers of the compose file,
+// Roles with special rules when they are granted or revoked, see AuthorizationService.replaceUserRoles.
+export const ADMIN_ROLE: UserRole = "admin";
+// Gives control over the docker containers, which admin:all intentionally does not cover.
+export const DEPLOYER_ROLE: UserRole = "deployer";
+
+// Operations on the docker containers. Status and logs cover all containers of the compose file,
 // pull, deploy (update and rollback) and restart only the api container.
 export const DOCKER_PERMISSIONS = [
   "admin:docker:status",
