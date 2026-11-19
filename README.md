@@ -222,9 +222,15 @@ The `npm run docker:*` scripts always use both files.
 
 ### Production (NAS)
 - Copy `docker-compose.yml`, `.env.api`, `.env.database` and `deploy.env` (from `deploy.env.example`) to the NAS
-  (not `docker-compose.dev.yml` and not the development `.env`). The images `ghcr.io/cpietsch82/todo-api`,
-  `ghcr.io/cpietsch82/todo-api-updater` and `ghcr.io/cpietsch82/todo-frontend` are private, so run `docker login ghcr.io` once as root with an access token that
-  has `read:packages`. The updater uses this login (`UPDATER_DOCKER_CONFIG`) to pull new api versions.
+  (not `docker-compose.dev.yml` and not the development `.env`).
+- The images `ghcr.io/cpietsch82/todo-api`, `ghcr.io/cpietsch82/todo-api-updater` and
+  `ghcr.io/cpietsch82/todo-frontend` are public on GHCR, so the NAS and the updater can pull them without a
+  `docker login`. A new package on GHCR starts as private (it inherits the visibility of its private repository) and
+  answers every pull with `unauthorized`, even when the image exists. Make it public once under Packages → Package
+  settings → Change visibility.
+- If an image should stay private, run `docker login ghcr.io -u <github user>` on the NAS with a classic access token
+  that has `read:packages`, as the same user that runs `docker compose` (root when it is started with `sudo`). The
+  updater reads this login through `UPDATER_DOCKER_CONFIG` to pull new api versions.
 - `deploy.env` holds the versions and the updater settings. Docker Compose reads variables for the compose file only
   from the `--env-file`, not from the `env_file` of a service, so start every command with it:
   `docker compose --env-file deploy.env up -d` (alternatively `export COMPOSE_ENV_FILES=deploy.env`). Without

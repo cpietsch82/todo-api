@@ -94,7 +94,7 @@ services:
       # this folder at the SAME absolute path as on the host, so the relative paths of this file (./postgres_data,
       # ./api_logs) still point to the right folders when the updater runs docker compose
       - .:${UPDATER_PROJECT_DIR:-/updater-project-dir-not-set}
-      # the docker login of the NAS, needed to pull the private images from GHCR (docker login ghcr.io)
+      # the docker login of the NAS (docker login ghcr.io); the images on GHCR are public, it is only needed for private ones
       - ${UPDATER_DOCKER_CONFIG:-/root/.docker/config.json}:/root/.docker/config.json:ro
     depends_on:
       postgres:
