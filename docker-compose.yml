@@ -48,11 +48,33 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    ports:
-      - "3000:3000"
+    # no published port: the api is only reached through the frontend (nginx forwards /api to api:3000) inside of the
+    # compose network. Because of that proxy TRUST_PROXY in .env.api has to count it (see .env.example).
     depends_on:
       postgres:
         condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    # The web app (nginx with the built Vue app). It serves the app and forwards /api to the api, so the browser only
+    # talks to one origin. The reverse proxy (Nginx Proxy Manager) points to this container.
+    # The tag has a placeholder default instead of ":?", because compose resolves it for every command, also for the
+    # commands of the updater and the local docker:* scripts, which do not need the frontend.
+    image: ghcr.io/cpietsch82/todo-frontend:${FRONTEND_IMAGE_TAG:-set-FRONTEND_IMAGE_TAG-in-deploy.env}
+    container_name: todo-frontend
+    ports:
+      - "${FRONTEND_PORT:-8090}:8080"
+    # nginx runs as an unprivileged user and only writes to /tmp
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # the frontend also starts without a healthy api, /api then answers 502 until the api is back
+    depends_on:
+      - api
     restart: unless-stopped
 
   updater:

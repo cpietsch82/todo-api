@@ -206,8 +206,8 @@ There are two compose files, so development and production stay strictly separat
 
 | File | Purpose |
 |---|---|
-| `docker-compose.yml` | **Base, safe for production (NAS):** Postgres without a host port, Adminer on demand, the API from GHCR in a fixed version |
-| `docker-compose.dev.yml` | **Development only:** publishes Postgres on `127.0.0.1:5432` and builds the API image locally. Never copy it to the NAS |
+| `docker-compose.yml` | **Base, safe for production (NAS):** Postgres without a host port, Adminer on demand, the API and the frontend from GHCR in fixed versions; only the frontend has a published port |
+| `docker-compose.dev.yml` | **Development only:** publishes Postgres on `127.0.0.1:5432` and the API on `127.0.0.1:3000`, builds the API image locally and the frontend image with `--profile frontend` (from `../todo-frontend`, see `FRONTEND_BUILD_CONTEXT`). Never copy it to the NAS |
 
 The `npm run docker:*` scripts always use both files.
 
@@ -217,11 +217,13 @@ The `npm run docker:*` scripts always use both files.
 - `npm run docker:up` starts the whole stack including an API image built from the local `Dockerfile`
   (tag `API_IMAGE_TAG=local` in `.env`). Do not run it together with `npm run dev`, both use port 3000.
 - `npm run docker:adminer` starts Adminer on `http://localhost:8080` (server `postgres`, user and password from `.env.database`).
+- The whole stack with the frontend container: `docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile frontend up -d --build api frontend`,
+  then open `http://localhost:8090`. For daily frontend work the Vite dev server of the frontend is enough.
 
 ### Production (NAS)
 - Copy `docker-compose.yml`, `.env.api`, `.env.database` and `deploy.env` (from `deploy.env.example`) to the NAS
-  (not `docker-compose.dev.yml` and not the development `.env`). The images `ghcr.io/cpietsch82/todo-api` and
-  `ghcr.io/cpietsch82/todo-api-updater` are private, so run `docker login ghcr.io` once as root with an access token that
+  (not `docker-compose.dev.yml` and not the development `.env`). The images `ghcr.io/cpietsch82/todo-api`,
+  `ghcr.io/cpietsch82/todo-api-updater` and `ghcr.io/cpietsch82/todo-frontend` are private, so run `docker login ghcr.io` once as root with an access token that
   has `read:packages`. The updater uses this login (`UPDATER_DOCKER_CONFIG`) to pull new api versions.
 - `deploy.env` holds the versions and the updater settings. Docker Compose reads variables for the compose file only
   from the `--env-file`, not from the `env_file` of a service, so start every command with it:
@@ -234,6 +236,9 @@ The `npm run docker:*` scripts always use both files.
   same compose project name (the folder name).
 - **Update / rollback:** through the admin api (`POST /api/admin/deployments/deploy`), or by hand: set `API_IMAGE_TAG`
   in `deploy.env`, then `docker compose --env-file deploy.env pull api && docker compose --env-file deploy.env up -d api`.
+- **Update of the frontend:** set `FRONTEND_IMAGE_TAG` in `deploy.env`, then
+  `docker compose --env-file deploy.env pull frontend && docker compose --env-file deploy.env up -d frontend`
+  (the updater only handles the api).
 - **Update of the updater:** set `UPDATER_IMAGE_TAG` in `deploy.env`, then
   `docker compose --env-file deploy.env pull updater && docker compose --env-file deploy.env up -d updater`.
 - **Adminer** is only started on demand: `docker compose --env-file deploy.env --profile tools up -d adminer`, and stopped
@@ -244,8 +249,12 @@ The `npm run docker:*` scripts always use both files.
   (if the API only logs to stdout, run `chown 1000:1000 api_logs` once).
 
 ### Container
-- **Ports:** Postgres and Adminer are never reachable from the network (Adminer only on `127.0.0.1`), the API
-  (`3000`) is. The API reaches Postgres through the compose network.
+- **Ports:** Only the frontend is reachable from the network (`FRONTEND_PORT`, default `8090`). Its nginx serves the
+  web app and forwards `/api` to the API inside of the compose network, so the API has no published port. Postgres and
+  Adminer are never reachable from the network (Adminer only on `127.0.0.1`). The API reaches Postgres through the
+  compose network.
+- **Frontend container:** nginx as an unprivileged user, read-only file system (only `/tmp` is writable), without
+  Linux capabilities and with `no-new-privileges`; healthcheck on `/healthz`.
 - **API container:** runs as the unprivileged user `node`, without Linux capabilities and with `no-new-privileges`.
   The image has a `HEALTHCHECK` on `/api/health`, so `docker ps` shows whether the API is healthy.
 - **Updater container:** has the docker socket, which means full control over the NAS. It runs as root (the socket
@@ -294,8 +303,10 @@ of `ExpressAPI` (`respondBadRequest`, `respondConflict`, `respondAuthorizationRe
 - Only JSON bodies are accepted, bigger than 100 kb are answered with `413`.
 - `/api` has a general limit per IP (`RATE_LIMIT_PER_IP`), `/auth/login` (failed attempts only) and `/auth/register`
   have stricter limits. All counters are held in memory, so they are valid per instance and reset on restart.
-- Behind a reverse proxy set `TRUST_PROXY` to the number of proxies (usually `1`), otherwise all clients share the IP of
+- Behind a reverse proxy set `TRUST_PROXY` to the number of proxies, otherwise all clients share the IP of
   the proxy. Never use it without a proxy: the `X-Forwarded-For` header could be forged to bypass the limits.
+  In docker compose the nginx of the frontend is always one proxy: `1` with only the frontend, `2` with Nginx Proxy
+  Manager in front of it, `3` with Cloudflare and Nginx Proxy Manager.
 
 ## Project Structure
 
