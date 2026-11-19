@@ -28,6 +28,7 @@
     "db:migrate": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio",
     "db:drop": "drizzle-kit drop",
+    "user:create": "ts-node -r tsconfig-paths/register src/scripts/createUser.ts",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix"
   },
