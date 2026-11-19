@@ -10,6 +10,16 @@ services:
     # the image is built from the local Dockerfile instead of being pulled from GHCR
     image: todo-api:${API_IMAGE_TAG:-local}
     build: .
+    ports:
+      # only for local development (Vite dev server, Postman), on the NAS the api has no published port
+      - "127.0.0.1:3000:3000"
+
+  frontend:
+    # locally only on demand: --profile frontend. Built from the frontend repository next to this one
+    # (FRONTEND_BUILD_CONTEXT changes the path); for daily work the Vite dev server of the frontend is enough.
+    profiles: ["frontend"]
+    image: todo-frontend:${FRONTEND_IMAGE_TAG:-local}
+    build: ${FRONTEND_BUILD_CONTEXT:-../todo-frontend}
 
   updater:
     # the updater is meant for the NAS, locally it only starts on demand: --profile updater

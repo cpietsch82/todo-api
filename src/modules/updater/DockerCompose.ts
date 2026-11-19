@@ -9,7 +9,7 @@ export const COMPOSE_FILE_NAME = "docker-compose.yml";
 export const DEPLOY_ENV_FILE_NAME = "deploy.env";
 
 // variables of the compose file that must only come from deploy.env (or explicitly from the updater)
-const TAG_VARIABLES = ["API_IMAGE_TAG", "UPDATER_IMAGE_TAG"];
+const TAG_VARIABLES = ["API_IMAGE_TAG", "UPDATER_IMAGE_TAG", "FRONTEND_IMAGE_TAG"];
 
 export interface DockerComposeConfig {
   /** absolute path, the same as on the host, so the relative bind mounts of the compose file stay correct */
