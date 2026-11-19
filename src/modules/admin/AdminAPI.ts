@@ -8,8 +8,12 @@ import { createDockerOperationRateLimiter } from "@/middleware/rateLimit";
 import { validateBody, validateParams } from "@/middleware/validate";
 import { DOCKER_PERMISSIONS, type DockerPermission } from "@/modules/authorization/permissions";
 import { typedHandler } from "@/utils/typedHandler";
-import { TypedRequestBody, TypedRequestParams } from "../express/Express";
+import { TypedRequest, TypedRequestBody, TypedRequestParams } from "../express/Express";
 import {
+  AdminUserByIdParams,
+  adminUserByIdSchema,
+  UserRolesBody,
+  userRolesSchema,
   containerLogsQuerySchema,
   ContainerServiceParams,
   containerServiceSchema,
@@ -52,7 +56,7 @@ function toResponse(deployment: Deployment, { withOutput }: { withOutput: boolea
 
 export class AdminAPI extends APIModule {
   public static instance: AdminAPI;
-  protected service: AdminService;
+  protected adminService: AdminService;
   protected deploymentService: DeploymentService;
   protected containerService: ContainerService;
   protected versionService: VersionService;
@@ -60,7 +64,7 @@ export class AdminAPI extends APIModule {
   constructor() {
     super("admin.api", "API Module for administrative tasks", "/admin");
 
-    this.service = new AdminService();
+    this.adminService = new AdminService();
     this.deploymentService = new DeploymentService();
     this.containerService = new ContainerService();
     this.versionService = new VersionService();
@@ -76,6 +80,18 @@ export class AdminAPI extends APIModule {
     // This is only the outer gate: every route additionally requires its own permission with requireFreshPermissions
     // (admin:all does not cover the docker permissions).
     this.router.use(requireAnyFreshPermission("admin:all", ...DOCKER_PERMISSIONS));
+
+    // ---- users and their roles (admins only) -----------------------------------
+    // profile fields (names, e-mail) are changed with PATCH /api/users/:userId, which admins may use for every user
+    this.router.get("/users", requireFreshPermissions("admin:all"), this.listUsers.bind(this));
+    this.router.get("/roles", requireFreshPermissions("admin:all"), this.listRoles.bind(this));
+    this.router.put(
+      "/users/:userId/roles",
+      requireFreshPermissions("admin:all"),
+      validateParams(adminUserByIdSchema),
+      validateBody(userRolesSchema),
+      typedHandler(this.setUserRoles.bind(this)),
+    );
 
     // ---- reading -------------------------------------------------------------
     this.router.get("/version", requireFreshPermissions("admin:docker:status"), this.getVersion.bind(this));
@@ -118,6 +134,24 @@ export class AdminAPI extends APIModule {
       requireFreshPermissions(OPERATION_PERMISSIONS.restart),
       this.requestRestart.bind(this),
     );
+  }
+
+  private async listUsers(_req: Request, res: Response) {
+    res.json(await this.adminService.listUsers());
+  }
+
+  private async listRoles(_req: Request, res: Response) {
+    res.json(await this.adminService.listRoles());
+  }
+
+  /** Replaces the roles of a user and answers with the user, its new roles and permissions. */
+  private async setUserRoles(req: TypedRequest<AdminUserByIdParams, UserRolesBody>, res: Response) {
+    const user = await this.adminService.setUserRoles({
+      userId: req.params.userId,
+      roles: req.body.roles,
+      actorId: req.user!.id,
+    });
+    res.json(user);
   }
 
   /**

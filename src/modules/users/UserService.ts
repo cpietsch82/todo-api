@@ -1,5 +1,5 @@
 import { db } from "@/db";
-import { eq } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 import { BaseModule } from "../core/BaseModule";
 import { users, type NewUser, type UpdateUser, type User } from "./schema/user.schema";
 
@@ -28,15 +28,13 @@ export class UserService extends BaseModule {
   }
 
   async getAllUsers(): Promise<User[]> {
-    const users = await db.query.users.findMany({});
+    const rows = await db.select().from(users).orderBy(asc(users.createdAt));
 
-    return users;
+    return rows;
   }
 
   async getUserById(userId: string): Promise<User | undefined> {
-    const user = await db.query.users.findFirst({
-      where: eq(users.userId, userId),
-    });
+    const user = await db.select().from(users).where(eq(users.userId, userId)).limit(1).then((rows) => rows[0]);
 
     return user;
   }

@@ -17,12 +17,12 @@ import { requirePermissions, requireTodoCommentOwnership } from "@/middleware/pe
 
 export class TodoCommentAPI extends APIModule {
   private static instance: TodoCommentAPI;
-  private service: TodoCommentService;
+  private todoCommentService: TodoCommentService;
 
   constructor() {
     super("todoComment.api", "API Module for Todo Comment management", "/todo-comments");
 
-    this.service = new TodoCommentService();
+    this.todoCommentService = new TodoCommentService();
 
     if (!TodoCommentAPI.instance) {
       TodoCommentAPI.instance = this;
@@ -65,13 +65,13 @@ export class TodoCommentAPI extends APIModule {
   }
 
   private async getAllTodoComments(req: Request, res: Response) {
-    const todoComments = await this.service.getAllTodoCommentsForUser(req.user!.id);
+    const todoComments = await this.todoCommentService.getAllTodoCommentsForUser(req.user!.id);
     res.status(200).json(todoComments);
   }
 
   private async getTodoCommentById(req: TypedRequestParams<TodoCommentByIdParams>, res: Response) {
     const { commentId } = req.params;
-    const todoComment = await this.service.getTodoCommentById(commentId);
+    const todoComment = await this.todoCommentService.getTodoCommentById(commentId);
     if (!todoComment) return res.respondNotFound();
     res.status(200).json(todoComment);
   }
@@ -84,7 +84,7 @@ export class TodoCommentAPI extends APIModule {
       userId: req.user?.id,
     };
 
-    const todoComment = await this.service.createTodoComment(newComment as TodoComment);
+    const todoComment = await this.todoCommentService.createTodoComment(newComment as TodoComment);
     res.status(201).json(todoComment);
   }
 
@@ -92,16 +92,16 @@ export class TodoCommentAPI extends APIModule {
     const { commentId } = req.params;
     const { updates } = req.body;
 
-    const todoComment = await this.service.getTodoCommentById(commentId);
+    const todoComment = await this.todoCommentService.getTodoCommentById(commentId);
     if (!todoComment) return res.respondNotFound();
 
-    const updatedTodoComment = await this.service.updateTodoComment(commentId, updates);
+    const updatedTodoComment = await this.todoCommentService.updateTodoComment(commentId, updates);
     res.status(200).json(updatedTodoComment);
   }
 
   private async deleteTodoComment(req: TypedRequestParams<TodoCommentByIdParams>, res: Response) {
     const { commentId } = req.params;
-    const deletedTodoComment = await this.service.deleteTodoComment(commentId);
+    const deletedTodoComment = await this.todoCommentService.deleteTodoComment(commentId);
     res.status(200).json(deletedTodoComment);
   }
 }

@@ -1,6 +1,5 @@
 import { comparePasswords, hashPassword } from "@/utils/passwords";
 import { BaseModule } from "../core/BaseModule";
-import { UserService } from "../users/UserService";
 import { users } from "../users/schema/user.schema";
 import { db } from "@/db";
 import { authentications } from "./schema/authentication.schema";
@@ -13,13 +12,11 @@ import { isUniqueViolation } from "@/utils/dbErrors";
 
 export class AuthenticationService extends BaseModule {
   public static instance: AuthenticationService;
-  userService: UserService;
-  tokenService: TokenService;
-  authorizationService: AuthorizationService;
+  protected tokenService: TokenService;
+  protected authorizationService: AuthorizationService;
 
   constructor() {
     super("authentication.service", "Business logic for User authentication management");
-    this.userService = new UserService();
 
     if (!AuthenticationService.instance) {
       AuthenticationService.instance = this;
