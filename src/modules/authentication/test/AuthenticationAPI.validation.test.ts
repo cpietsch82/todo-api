@@ -8,7 +8,7 @@ import { db } from "@/db";
 import { authentications, roles, users } from "@/db/schema";
 import { hashPassword } from "@/utils/passwords";
 import { updateUserSchema } from "@/modules/users/schema/user.schema";
-import { registerSchema } from "../schema/authentication.schema";
+import { refreshSchema, registerSchema } from "../schema/authentication.schema";
 
 const PAYLOAD = {
   email: "jane@example.com",
@@ -138,6 +138,13 @@ describe("Validation of the registration", () => {
 
       // once the problem is fixed, the same registration works
       expect((await register(server, PAYLOAD)).status).toBe(201);
+    });
+  });
+
+  describe("refresh token", () => {
+    it("should reject a refresh token that is longer than any token the api creates", () => {
+      expect(refreshSchema.safeParse({ refreshToken: "a".repeat(128) }).success).toBe(true);
+      expect(refreshSchema.safeParse({ refreshToken: "a".repeat(257) }).success).toBe(false);
     });
   });
 });

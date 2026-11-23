@@ -72,6 +72,18 @@ export const createDockerOperationRateLimiter = () =>
     message: "Too many docker operations from this IP, please try again later.",
   });
 
+/**
+ * Limits the token routes (refresh, logout) per IP. Every request counts. A normal client refreshes about once per
+ * access token lifetime and page load, so the limit is far above normal use. Each route gets its own counter, so a
+ * client that used up its refreshes can still log out.
+ */
+export const createTokenRateLimiter = () =>
+  createRateLimiter({
+    windowMs: env.TOKEN_RATE_LIMIT_WINDOW_MS,
+    limit: env.TOKEN_RATE_LIMIT_MAX,
+    message: "Too many token requests from this IP, please try again later.",
+  });
+
 /** Limits the creation of accounts per IP. */
 export const createRegisterRateLimiter = () =>
   createRateLimiter({

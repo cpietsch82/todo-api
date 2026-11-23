@@ -60,6 +60,9 @@ export const envSchema = z.object({
   // failed login attempts per account (e-mail), whatever IP they come from
   LOGIN_ACCOUNT_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(10),
   LOGIN_ACCOUNT_RATE_LIMIT_WINDOW_MS: z.coerce.number().positive().default(15 * 60 * 1000),
+  // requests to /auth/refresh and /auth/logout (each counted separately) per IP
+  TOKEN_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(60),
+  TOKEN_RATE_LIMIT_WINDOW_MS: z.coerce.number().positive().default(15 * 60 * 1000),
   REGISTER_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(5),
   REGISTER_RATE_LIMIT_WINDOW_MS: z.coerce.number().positive().default(60 * 60 * 1000),
   // ---- updater (only used by the updater container, see src/modules/updater) ----

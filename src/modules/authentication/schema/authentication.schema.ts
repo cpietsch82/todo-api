@@ -106,7 +106,8 @@ export const loginSchema = z.object({
 export type LoginBody = z.infer<typeof loginSchema>;
 
 export const refreshSchema = z.object({
-  refreshToken: z.string(),
+  // the api creates tokens of 128 hex characters, the maximum leaves room for a longer format later
+  refreshToken: z.string().max(256),
 });
 
 export type RefreshBody = z.infer<typeof refreshSchema>;

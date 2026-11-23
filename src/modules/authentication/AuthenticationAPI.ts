@@ -5,7 +5,12 @@ import { TypedRequestBody } from "../express/Express";
 import { validateBody } from "@/middleware/validate";
 import { RegisterBody, registerSchema, loginSchema, LoginBody, refreshSchema, RefreshBody } from "./schema/authentication.schema";
 import TokenService from "./TokenService";
-import { createLoginAccountRateLimiter, createLoginRateLimiter, createRegisterRateLimiter } from "@/middleware/rateLimit";
+import {
+  createLoginAccountRateLimiter,
+  createLoginRateLimiter,
+  createRegisterRateLimiter,
+  createTokenRateLimiter,
+} from "@/middleware/rateLimit";
 
 export class AuthenticationAPI extends APIModule {
   public static instance: AuthenticationAPI;
@@ -32,10 +37,10 @@ export class AuthenticationAPI extends APIModule {
       createLoginAccountRateLimiter(),
       this.login.bind(this),
     );
-    this.router.post("/refresh", validateBody(refreshSchema), this.refresh.bind(this));
+    this.router.post("/refresh", createTokenRateLimiter(), validateBody(refreshSchema), this.refresh.bind(this));
     // logout needs no access token: the refresh token itself proves that the client may revoke it,
     // so a client with an expired access token can still end its session on the server
-    this.router.post("/logout", validateBody(refreshSchema), this.logout.bind(this));
+    this.router.post("/logout", createTokenRateLimiter(), validateBody(refreshSchema), this.logout.bind(this));
   }
 
   private async checkMe(req: TypedRequestBody<{ user: object }>, res: Response) {
