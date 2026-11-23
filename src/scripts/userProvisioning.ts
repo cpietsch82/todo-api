@@ -90,7 +90,8 @@ export function parseCreateUserArgs(argv: string[]): CreateUserOptions | "help" 
   const extraRoles = (values.role ?? []).flatMap((role) => role.split(",")).map((role) => role.trim()).filter(Boolean);
 
   return {
-    email: values.email.trim(),
+    // the same normalization as the api (emailSchema), otherwise the lookup of an existing user misses it
+    email: values.email.trim().toLowerCase(),
     username: values.username?.trim(),
     firstName: values["first-name"]?.trim(),
     lastName: values["last-name"]?.trim(),

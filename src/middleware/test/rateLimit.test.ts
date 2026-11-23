@@ -101,6 +101,26 @@ describe("createRateLimiter", () => {
       expect(otherClient.status).toBe(401);
     });
 
+    it("should count by the given key instead of the IP, so changing the IP does not help", async () => {
+      const perAccount = createApp(
+        { windowMs: 60_000, limit: 1, skipSuccessfulRequests: true, keyGenerator: (req) => String(req.body.account) },
+        1,
+      );
+
+      await request(perAccount).post("/login").set("X-Forwarded-For", "203.0.113.1").send({ account: "a", fail: true });
+      const sameAccountOtherIp = await request(perAccount)
+        .post("/login")
+        .set("X-Forwarded-For", "203.0.113.2")
+        .send({ account: "a", fail: true });
+      const otherAccountSameIp = await request(perAccount)
+        .post("/login")
+        .set("X-Forwarded-For", "203.0.113.1")
+        .send({ account: "b", fail: true });
+
+      expect(sameAccountOtherIp.status).toBe(429);
+      expect(otherAccountSameIp.status).toBe(401);
+    });
+
     it("should not trust a forged header when no proxy is trusted", async () => {
       const direct = createApp({ windowMs: 60_000, limit: 1, skipSuccessfulRequests: true }, 0);
 

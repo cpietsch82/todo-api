@@ -68,6 +68,7 @@ Validated at startup in `env.ts` (the process exits when something is missing or
 | `REFRESH_TOKEN_MAX_PER_USER` | Maximum number of active refresh tokens (logins on different devices) per user, default `6`; the oldest are removed |
 | `TRUST_PROXY` | Number of reverse proxies in front of the API (default `0`). Needed so the rate limits use the real client IP; do not set it without a proxy |
 | `LOGIN_RATE_LIMIT_MAX` / `LOGIN_RATE_LIMIT_WINDOW_MS` | Failed login attempts per IP within the window (default `10` per 15 minutes) |
+| `LOGIN_ACCOUNT_RATE_LIMIT_MAX` / `LOGIN_ACCOUNT_RATE_LIMIT_WINDOW_MS` | Failed login attempts per account (e-mail) within the window, from any IP (default `10` per 15 minutes) |
 | `REGISTER_RATE_LIMIT_MAX` / `REGISTER_RATE_LIMIT_WINDOW_MS` | Registrations per IP within the window (default `5` per hour) |
 | `DOCKER_OPERATION_RATE_LIMIT_MAX` / `DOCKER_OPERATION_RATE_LIMIT_WINDOW_MS` | Docker operations (pull, deploy, restart) per IP within the window (default `10` per 15 minutes) |
 | `EXPOSE_ERROR_DETAILS` | Developer flag (default `false`): responses contain the complete error message and stack trace of unexpected errors. The API refuses to start with it when `APP_STAGE=production` |

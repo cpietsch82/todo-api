@@ -1,5 +1,5 @@
 import { index, pgTable, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
-import { InsertUserSchema, users } from "@/modules/users/schema/user.schema";
+import { emailSchema, InsertUserSchema, users } from "@/modules/users/schema/user.schema";
 import { createInsertSchema } from "drizzle-zod";
 import z from "zod";
 import { relations } from "drizzle-orm";
@@ -90,7 +90,7 @@ export type RegisterBody = z.infer<typeof UserSchema> & {
 
 // here we are fine again
 export const loginSchema = z.object({
-  email: z.email(),
+  email: emailSchema,
   password: z.string().min(8),
 });
 

@@ -1,4 +1,4 @@
-import rateLimit, { type RateLimitRequestHandler } from "express-rate-limit";
+import rateLimit, { type Options, type RateLimitRequestHandler } from "express-rate-limit";
 import env from "../../env";
 import { logger } from "@/utils/logger";
 
@@ -8,6 +8,8 @@ export interface RateLimiterOptions {
   message?: string;
   /** only count requests which ended with a status >= 400, e.g. to throttle failed logins only */
   skipSuccessfulRequests?: boolean;
+  /** what the requests are counted by, the client IP when not given */
+  keyGenerator?: Options["keyGenerator"];
 }
 
 /**
@@ -19,11 +21,13 @@ export function createRateLimiter({
   limit,
   message = "Too many requests from this IP, please try again later.",
   skipSuccessfulRequests = false,
+  keyGenerator,
 }: RateLimiterOptions): RateLimitRequestHandler {
   return rateLimit({
     windowMs,
     limit,
     skipSuccessfulRequests,
+    ...(keyGenerator && { keyGenerator }),
     standardHeaders: true,
     legacyHeaders: false,
     handler: (req, res) => {
@@ -43,6 +47,20 @@ export const createLoginRateLimiter = () =>
     windowMs: env.LOGIN_RATE_LIMIT_WINDOW_MS,
     limit: env.LOGIN_RATE_LIMIT_MAX,
     skipSuccessfulRequests: true,
+    message: "Too many login attempts, please try again later.",
+  });
+
+/**
+ * Brute force protection per account: failed login attempts are counted per e-mail, so an attacker with many IPs
+ * cannot try passwords endlessly. E-mails without an account are counted the same way, so the block does not reveal
+ * which accounts exist. Has to run after validateBody(loginSchema), which normalizes the e-mail (trim, lowercase).
+ */
+export const createLoginAccountRateLimiter = () =>
+  createRateLimiter({
+    windowMs: env.LOGIN_ACCOUNT_RATE_LIMIT_WINDOW_MS,
+    limit: env.LOGIN_ACCOUNT_RATE_LIMIT_MAX,
+    skipSuccessfulRequests: true,
+    keyGenerator: (req) => `login-account:${String(req.body?.email)}`,
     message: "Too many login attempts, please try again later.",
   });
 

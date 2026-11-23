@@ -78,6 +78,13 @@
       "when": 1793653193375,
       "tag": "0010_container_status_and_logs",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1793653194375,
+      "tag": "0011_normalize_email_and_username",
+      "breakpoints": true
     }
   ]
 }

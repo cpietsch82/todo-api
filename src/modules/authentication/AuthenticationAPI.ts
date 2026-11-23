@@ -5,7 +5,7 @@ import { TypedRequestBody } from "../express/Express";
 import { validateBody } from "@/middleware/validate";
 import { RegisterBody, registerSchema, loginSchema, LoginBody, refreshSchema, RefreshBody } from "./schema/authentication.schema";
 import TokenService from "./TokenService";
-import { createLoginRateLimiter, createRegisterRateLimiter } from "@/middleware/rateLimit";
+import { createLoginAccountRateLimiter, createLoginRateLimiter, createRegisterRateLimiter } from "@/middleware/rateLimit";
 
 export class AuthenticationAPI extends APIModule {
   public static instance: AuthenticationAPI;
@@ -24,7 +24,14 @@ export class AuthenticationAPI extends APIModule {
 
   protected initializeRoutes(): void {
     this.router.post("/register", createRegisterRateLimiter(), validateBody(registerSchema), this.register.bind(this));
-    this.router.post("/login", createLoginRateLimiter(), validateBody(loginSchema), this.login.bind(this));
+    // the limit per account comes after the validation, because it counts by the normalized e-mail
+    this.router.post(
+      "/login",
+      createLoginRateLimiter(),
+      validateBody(loginSchema),
+      createLoginAccountRateLimiter(),
+      this.login.bind(this),
+    );
     this.router.post("/refresh", validateBody(refreshSchema), this.refresh.bind(this));
     // logout needs no access token: the refresh token itself proves that the client may revoke it,
     // so a client with an expired access token can still end its session on the server

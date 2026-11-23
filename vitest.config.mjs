@@ -8,6 +8,7 @@ export default defineConfig({
     // the strict limits of the auth routes and the docker operations would block the many requests of the tests
     env: {
       LOGIN_RATE_LIMIT_MAX: "1000",
+      LOGIN_ACCOUNT_RATE_LIMIT_MAX: "1000",
       REGISTER_RATE_LIMIT_MAX: "1000",
       DOCKER_OPERATION_RATE_LIMIT_MAX: "1000",
       // the tests check that error details stay hidden, a local .env that enables them must not change that
