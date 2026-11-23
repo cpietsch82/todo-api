@@ -130,7 +130,7 @@ export async function provisionUser(
     .where(eq(users.email, options.email))
     .limit(1);
 
-  let newUser: { username: string; firstName?: string; lastName?: string; password: string } | undefined;
+  let newUser: { username: string; firstName?: string | null; lastName?: string | null; password: string } | undefined;
   if (existing) {
     if (options.username || options.firstName || options.lastName) {
       throw new UsageError(
@@ -153,10 +153,11 @@ export async function provisionUser(
     const checkedPassword = registerSchema.shape.password.safeParse(password);
     if (!checkedPassword.success) throw new UsageError(`password: ${checkedPassword.error.issues[0].message}`);
 
+    // the normalized values (trimmed, unicode form, empty name as null), the same as a registration stores
     newUser = {
-      username: options.username,
-      firstName: options.firstName,
-      lastName: options.lastName,
+      username: profile.data.username,
+      firstName: profile.data.firstName,
+      lastName: profile.data.lastName,
       password: await hashPassword(checkedPassword.data),
     };
   }

@@ -73,8 +73,19 @@ const UserSchema = InsertUserSchema.omit({
   updatedAt: true,
 });
 
+// bcrypt only uses the first 72 bytes of a password, everything after it would be ignored silently
+export const PASSWORD_MAX_BYTES = 72;
+
+/** A new password. The login does not check the maximum, so older, longer passwords keep working. */
+export const newPasswordSchema = z
+  .string()
+  .min(8)
+  .refine((password) => Buffer.byteLength(password, "utf8") <= PASSWORD_MAX_BYTES, {
+    message: `Password must not be longer than ${PASSWORD_MAX_BYTES} bytes`,
+  });
+
 export const registerSchema = UserSchema.extend({
-  password: z.string().min(8),
+  password: newPasswordSchema,
 });
 
 // type UserBody = z.infer<typeof UserSchema>;
@@ -84,9 +95,7 @@ export const registerSchema = UserSchema.extend({
 // };
 
 // FIXME: try a better approach to set up the type for the registration body
-export type RegisterBody = z.infer<typeof UserSchema> & {
-  password: string;
-};
+export type RegisterBody = z.infer<typeof registerSchema>;
 
 // here we are fine again
 export const loginSchema = z.object({

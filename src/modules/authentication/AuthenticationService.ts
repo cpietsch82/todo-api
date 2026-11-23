@@ -39,8 +39,8 @@ export class AuthenticationService extends BaseModule {
     email: string,
     username: string,
     password: string,
-    firstName: string | undefined,
-    lastName: string | undefined,
+    firstName: string | null | undefined,
+    lastName: string | null | undefined,
   ) {
     const user = await db
       .transaction(async (tx) => {
@@ -59,6 +59,9 @@ export class AuthenticationService extends BaseModule {
           password: await hashPassword(password),
         });
 
+        // in the same transaction: if the role cannot be assigned, no user without role is left behind
+        await this.authorizationService.assignRoleToUser(user.userId, "user", tx);
+
         return user;
       })
       .catch((error: unknown) => {
@@ -67,7 +70,6 @@ export class AuthenticationService extends BaseModule {
         throw error;
       });
 
-    await this.authorizationService.assignRoleToUser(user.userId, "user");
     const authorization = await this.authorizationService.getAuthorizationForUser(user.userId);
     const tokenPair = await this.tokenService.generateTokenPair(buildJwtClaims(user, authorization));
 

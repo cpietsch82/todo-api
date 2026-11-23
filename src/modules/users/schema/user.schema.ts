@@ -43,13 +43,44 @@ export type UpdateUser = Partial<Omit<typeof users.$inferInsert, "userId" | "cre
  * An e-mail as it is stored and looked up: without surrounding whitespace and in lowercase, validated afterwards.
  * Use it for every e-mail that comes in, otherwise "Max@x.de" and "max@x.de" would be different accounts.
  */
-export const emailSchema = z.string().trim().toLowerCase().pipe(z.email("Invalid e-mail format"));
+export const emailSchema = z.string().trim().toLowerCase().max(255).pipe(z.email("Invalid e-mail format"));
+
+// Latin letters (including umlauts and accents), digits and . _ -
+// Other scripts are left out on purpose: a cyrillic "а" looks like a latin "a", so "аdmin" could pose as "admin" where
+// the username is shown to others (e.g. as author of a comment). The login uses the e-mail, so this is about display.
+const USERNAME_PATTERN = /^[\p{Script=Latin}0-9._-]+$/u;
+
+/**
+ * A username as it is stored. NFKC brings every way of writing the same character into one form ("ü" as one character
+ * or as "u" + combining diaeresis, full width "ａ" and "a"), otherwise the unique index could hold the same visible
+ * name twice. The spelling (case) is kept, uniqueness regardless of case is ensured by the database.
+ */
+export const usernameSchema = z
+  .string()
+  .trim()
+  .normalize("NFKC")
+  .min(3, "Username must have at least 3 characters")
+  .max(50, "Username must not be longer than 50 characters")
+  .regex(USERNAME_PATTERN, "Username may only contain latin letters, digits, dot, underscore and hyphen");
+
+// no control or invisible formatting characters (e.g. NUL, zero width space, right-to-left override)
+const NO_CONTROL_CHARACTERS = /^[^\p{Cc}\p{Cf}]*$/u;
+
+/** First or last name: any script, trimmed, at most 50 characters; an empty name is stored as null. */
+const personNameSchema = z
+  .string()
+  .trim()
+  .normalize("NFC")
+  .max(50, "Must not be longer than 50 characters")
+  .regex(NO_CONTROL_CHARACTERS, "Must not contain control characters")
+  .transform((name) => name || null)
+  .optional();
 
 export const InsertUserSchema = createInsertSchema(users, {
   email: emailSchema,
-  username: z.string(),
-  firstName: z.string().optional(),
-  lastName: z.string().optional(),
+  username: usernameSchema,
+  firstName: personNameSchema,
+  lastName: personNameSchema,
 });
 
 export const createUserSchema = z.object({
