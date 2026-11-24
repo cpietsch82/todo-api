@@ -135,6 +135,17 @@ describe("TodoAPI", () => {
 
       expect(response.status).toBe(403);
     });
+
+    it("should let an admin read the todo of another user", async () => {
+      const admin = await generateUser();
+      const foreignTodo = await generateTodo((await generateUser()).userId, { title: "Foreign Todo" });
+
+      const response = await request(server)
+        .get(`/api/todos/${foreignTodo.todoId}`)
+        .set(await createAuthHeader(admin, { role: "admin" }));
+
+      expect(response.status).toBe(200);
+    });
   });
 
   describe("PATCH /api/todos/:todoId", () => {

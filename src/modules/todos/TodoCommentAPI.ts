@@ -3,7 +3,6 @@ import { APIModule } from "../core/APIModule";
 import {
   CreateTodoCommentBody,
   createTodoCommentSchema,
-  TodoComment,
   TodoCommentByIdParams,
   todoCommentByIdSchema,
   UpdateTodoCommentBody,
@@ -13,7 +12,7 @@ import { typedHandler } from "@/utils/typedHandler";
 import { TypedRequest, TypedRequestBody, TypedRequestParams } from "../express/Express";
 import type { Request, Response } from "express";
 import { TodoCommentService } from "./TodoCommentService";
-import { requirePermissions, requireTodoCommentOwnership } from "@/middleware/permissions";
+import { requirePermissions, requireTodoAccess, requireTodoCommentOwnership } from "@/middleware/permissions";
 
 export class TodoCommentAPI extends APIModule {
   private static instance: TodoCommentAPI;
@@ -32,6 +31,8 @@ export class TodoCommentAPI extends APIModule {
 
   protected initializeRoutes(): void {
     const requireCommentOwner = requireTodoCommentOwnership(new TodoCommentService());
+    // a comment can be written on every todo the user may see, not only on own ones: that makes a discussion
+    const requireAccessToCommentedTodo = requireTodoAccess((req) => req.body?.commentRecord?.todoId);
 
     this.router.get("/", requirePermissions("todo-comments:read"), this.getAllTodoComments.bind(this));
     this.router.get(
@@ -44,7 +45,9 @@ export class TodoCommentAPI extends APIModule {
     this.router.post(
       "/",
       requirePermissions("todo-comments:create"),
+      // the validation first: the access check relies on todoId being a valid uuid
       validateBody(createTodoCommentSchema),
+      requireAccessToCommentedTodo,
       typedHandler(this.createTodoComment.bind(this)),
     );
     this.router.patch(
@@ -79,12 +82,10 @@ export class TodoCommentAPI extends APIModule {
   private async createTodoComment(req: TypedRequestBody<CreateTodoCommentBody>, res: Response) {
     const { commentRecord } = req.body;
 
-    const newComment = {
+    const todoComment = await this.todoCommentService.createTodoComment({
       ...commentRecord,
-      userId: req.user?.id,
-    };
-
-    const todoComment = await this.todoCommentService.createTodoComment(newComment as TodoComment);
+      userId: req.user!.id,
+    });
     res.status(201).json(todoComment);
   }
 

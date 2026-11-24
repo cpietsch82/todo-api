@@ -1,5 +1,5 @@
 import { index, pgTable, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
-import { InsertUserSchema, users } from "@/modules/users/schema/user.schema";
+import { emailSchema, InsertUserSchema, users } from "@/modules/users/schema/user.schema";
 import { createInsertSchema } from "drizzle-zod";
 import z from "zod";
 import { relations } from "drizzle-orm";
@@ -73,8 +73,19 @@ const UserSchema = InsertUserSchema.omit({
   updatedAt: true,
 });
 
+// bcrypt only uses the first 72 bytes of a password, everything after it would be ignored silently
+export const PASSWORD_MAX_BYTES = 72;
+
+/** A new password. The login does not check the maximum, so older, longer passwords keep working. */
+export const newPasswordSchema = z
+  .string()
+  .min(8)
+  .refine((password) => Buffer.byteLength(password, "utf8") <= PASSWORD_MAX_BYTES, {
+    message: `Password must not be longer than ${PASSWORD_MAX_BYTES} bytes`,
+  });
+
 export const registerSchema = UserSchema.extend({
-  password: z.string().min(8),
+  password: newPasswordSchema,
 });
 
 // type UserBody = z.infer<typeof UserSchema>;
@@ -84,20 +95,19 @@ export const registerSchema = UserSchema.extend({
 // };
 
 // FIXME: try a better approach to set up the type for the registration body
-export type RegisterBody = z.infer<typeof UserSchema> & {
-  password: string;
-};
+export type RegisterBody = z.infer<typeof registerSchema>;
 
 // here we are fine again
 export const loginSchema = z.object({
-  email: z.email(),
+  email: emailSchema,
   password: z.string().min(8),
 });
 
 export type LoginBody = z.infer<typeof loginSchema>;
 
 export const refreshSchema = z.object({
-  refreshToken: z.string(),
+  // the api creates tokens of 128 hex characters, the maximum leaves room for a longer format later
+  refreshToken: z.string().max(256),
 });
 
 export type RefreshBody = z.infer<typeof refreshSchema>;

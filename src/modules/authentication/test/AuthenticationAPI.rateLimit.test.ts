@@ -21,6 +21,7 @@ describe("AuthAPI rate limits", () => {
     // the limiters read the limits when the routes are created
     vi.spyOn(env, "LOGIN_RATE_LIMIT_MAX", "get").mockReturnValue(3);
     vi.spyOn(env, "REGISTER_RATE_LIMIT_MAX", "get").mockReturnValue(2);
+    vi.spyOn(env, "TOKEN_RATE_LIMIT_MAX", "get").mockReturnValue(2);
 
     new AuthenticationAPI();
     server = getTestApp();
@@ -61,5 +62,29 @@ describe("AuthAPI rate limits", () => {
     expect(blocked.status).toBe(429);
     expect(blocked.text).toBe("Too many login attempts, please try again later.");
     expect(blockedCorrect.status).toBe(429);
+  });
+
+  it("should limit token refreshes per IP", async () => {
+    // unknown tokens are enough, the limit counts every request
+    const first = await request(server).post("/api/auth/refresh").send({ refreshToken: "unknown-1" });
+    const second = await request(server).post("/api/auth/refresh").send({ refreshToken: "unknown-2" });
+    const third = await request(server).post("/api/auth/refresh").send({ refreshToken: "unknown-3" });
+
+    expect(first.status).toBe(401);
+    expect(second.status).toBe(401);
+    expect(third.status).toBe(429);
+    expect(third.text).toBe("Too many token requests from this IP, please try again later.");
+  });
+
+  it("should count logouts separately from refreshes and limit them as well", async () => {
+    // the refreshes of this IP are used up by the test above, a logout must still work
+    const first = await request(server).post("/api/auth/logout").send({ refreshToken: "unknown-1" });
+    const second = await request(server).post("/api/auth/logout").send({ refreshToken: "unknown-2" });
+    const third = await request(server).post("/api/auth/logout").send({ refreshToken: "unknown-3" });
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(third.status).toBe(429);
+    expect(third.text).toBe("Too many token requests from this IP, please try again later.");
   });
 });

@@ -11,7 +11,7 @@ import {
   updateTodoSchema,
 } from "./schema/todo.schema";
 import { validateBody, validateParams } from "@/middleware/validate";
-import { requirePermissions, requireTodoOwnership } from "@/middleware/permissions";
+import { requirePermissions, requireTodoAccess, requireTodoOwnership } from "@/middleware/permissions";
 import { TypedRequest, TypedRequestBody, TypedRequestParams } from "../express/Express";
 import { typedHandler } from "@/utils/typedHandler";
 
@@ -31,14 +31,16 @@ export class TodoAPI extends APIModule {
   }
 
   protected initializeRoutes(): void {
+    // reading needs access to the todo (TodoService.canAccessTodo), changing and deleting stays with its creator
     const requireTodoOwner = requireTodoOwnership(new TodoService());
+    const requireAccess = requireTodoAccess();
 
     this.router.get("/", requirePermissions("todos:read"), this.getAllTodos.bind(this));
     this.router.get(
       "/:todoId",
       validateParams(todoByIdSchema),
       requirePermissions("todos:read"),
-      requireTodoOwner,
+      requireAccess,
       typedHandler(this.getTodoById.bind(this)),
     );
     this.router.post("/", requirePermissions("todos:create"), validateBody(createTodoSchema), typedHandler(this.createTodo.bind(this)));

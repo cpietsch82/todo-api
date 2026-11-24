@@ -67,7 +67,7 @@ export class AdminService extends BaseModule {
     return rows.map((row) => toAdminUser(row, claims.get(row.userId)));
   }
 
-  async getUser(userId: string): Promise<AdminUser | undefined> {
+  private async getUser(userId: string): Promise<AdminUser | undefined> {
     const user = await this.userService.getUserById(userId);
     if (!user) return undefined;
 

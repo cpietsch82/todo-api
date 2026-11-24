@@ -9,6 +9,13 @@ import { buildJwtClaims } from "../authorization/permissions";
 import AuthorizationService from "../authorization/AuthorizationService";
 import { HttpError } from "@/utils/HttpError";
 import { isUniqueViolation } from "@/utils/dbErrors";
+import crypto from "node:crypto";
+
+// Hash of a random password, compared against when there is no user or no password for the e-mail. A login then takes
+// the same time whether the e-mail exists or not, so the response time does not reveal which accounts exist.
+// Created on first use with the configured cost, so it takes as long as comparing a real hash.
+let dummyPasswordHash: Promise<string> | undefined;
+const getDummyPasswordHash = () => (dummyPasswordHash ??= hashPassword(crypto.randomBytes(32).toString("hex")));
 
 export class AuthenticationService extends BaseModule {
   public static instance: AuthenticationService;
@@ -32,8 +39,8 @@ export class AuthenticationService extends BaseModule {
     email: string,
     username: string,
     password: string,
-    firstName: string | undefined,
-    lastName: string | undefined,
+    firstName: string | null | undefined,
+    lastName: string | null | undefined,
   ) {
     const user = await db
       .transaction(async (tx) => {
@@ -52,6 +59,9 @@ export class AuthenticationService extends BaseModule {
           password: await hashPassword(password),
         });
 
+        // in the same transaction: if the role cannot be assigned, no user without role is left behind
+        await this.authorizationService.assignRoleToUser(user.userId, "user", tx);
+
         return user;
       })
       .catch((error: unknown) => {
@@ -60,7 +70,6 @@ export class AuthenticationService extends BaseModule {
         throw error;
       });
 
-    await this.authorizationService.assignRoleToUser(user.userId, "user");
     const authorization = await this.authorizationService.getAuthorizationForUser(user.userId);
     const tokenPair = await this.tokenService.generateTokenPair(buildJwtClaims(user, authorization));
 
@@ -83,15 +92,13 @@ export class AuthenticationService extends BaseModule {
       where: eq(users.email, email),
     });
 
-    if (!user) throw HttpError.unauthorized("Invalid credentials");
+    const authentication = user
+      ? await db.query.authentications.findFirst({ where: eq(authentications.userId, user.userId) })
+      : undefined;
 
-    const authentication = await db.query.authentications.findFirst({
-      where: eq(authentications.userId, user.userId),
-    });
-    if (!authentication) throw HttpError.unauthorized("Invalid credentials");
-
-    const isValidatedPassword = await comparePasswords(password, authentication.password);
-    if (!isValidatedPassword) throw HttpError.unauthorized("Invalid credentials");
+    // always compare a hash, also without user (see getDummyPasswordHash)
+    const isValidatedPassword = await comparePasswords(password, authentication?.password ?? (await getDummyPasswordHash()));
+    if (!user || !authentication || !isValidatedPassword) throw HttpError.unauthorized("Invalid credentials");
     const authorization = await this.authorizationService.getAuthorizationForUser(user.userId);
     const tokenPair = await this.tokenService.generateTokenPair(buildJwtClaims(user, authorization));
 

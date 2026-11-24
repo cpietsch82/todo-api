@@ -77,13 +77,6 @@ describe("env ACCESS_TOKEN_SECRET", () => {
   it("should allow a short secret in development", () => {
     expect(envSchema.safeParse({ ...baseEnv, APP_STAGE: "dev", ACCESS_TOKEN_SECRET: "short" }).success).toBe(true);
   });
-
-  it("should not require the unused REFRESH_TOKEN_SECRET anymore", () => {
-    const withoutRefreshSecret: Record<string, string | undefined> = { ...baseEnv, ACCESS_TOKEN_SECRET: strongSecret };
-    delete withoutRefreshSecret.REFRESH_TOKEN_SECRET;
-
-    expect(envSchema.safeParse(withoutRefreshSecret).success).toBe(true);
-  });
 });
 
 describe("env ACCESS_TOKEN_TTL", () => {

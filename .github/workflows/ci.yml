@@ -13,7 +13,6 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
   ci:
@@ -58,15 +57,21 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/development'
     needs: ci
     environment: development
+    # only the docker jobs push to GHCR, the ci job (also running for pull requests) keeps read-only rights
+    permissions:
+      contents: read
+      packages: write
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-      
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: 24
+
+      - name: Short commit id
+        id: sha
+        run: echo "short=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to GHCR
         uses: docker/login-action@v4
@@ -75,23 +80,35 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Docker Image Build
-        run: |
-          docker build \
-            -t ghcr.io/${{ github.repository_owner }}/todo-api:dev \
-            -t ghcr.io/${{ github.repository_owner }}/todo-api:dev-${GITHUB_SHA::7} \
-            .
-          docker build --target updater \
-            -t ghcr.io/${{ github.repository_owner }}/todo-api-updater:dev \
-            -t ghcr.io/${{ github.repository_owner }}/todo-api-updater:dev-${GITHUB_SHA::7} \
-            .
+      # separate cache scopes per image, otherwise the second build overwrites the cache of the first one
+      - name: Build and push API image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: production
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/todo-api:dev
+            ghcr.io/${{ github.repository_owner }}/todo-api:dev-${{ steps.sha.outputs.short }}
+          cache-from: type=gha,scope=todo-api
+          cache-to: type=gha,mode=max,scope=todo-api
 
-      - name: Push Docker image
-        run: |
-          docker push ghcr.io/${{ github.repository_owner }}/todo-api:dev
-          docker push ghcr.io/${{ github.repository_owner }}/todo-api:dev-${GITHUB_SHA::7}
-          docker push ghcr.io/${{ github.repository_owner }}/todo-api-updater:dev
-          docker push ghcr.io/${{ github.repository_owner }}/todo-api-updater:dev-${GITHUB_SHA::7}
+      # also reads the cache of the API image, so the shared builder stage is reused
+      - name: Build and push updater image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: updater
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/todo-api-updater:dev
+            ghcr.io/${{ github.repository_owner }}/todo-api-updater:dev-${{ steps.sha.outputs.short }}
+          cache-from: |
+            type=gha,scope=todo-api
+            type=gha,scope=todo-api-updater
+          cache-to: type=gha,mode=max,scope=todo-api-updater
 
   docker-production:
     runs-on: ubuntu-latest
@@ -99,15 +116,13 @@ jobs:
     if: github.event_name == 'release'
     needs: ci
     environment: production
+    permissions:
+      contents: read
+      packages: write
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-      
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: 24
 
       - name: Verify version
         run: |
@@ -121,6 +136,9 @@ jobs:
             exit 1
           fi
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
       - name: Log in to GHCR
         uses: docker/login-action@v4
         with:
@@ -128,20 +146,30 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Docker Image Build
-        run: |
-          docker build \
-            -t ghcr.io/${{ github.repository_owner }}/todo-api:${{ needs.ci.outputs.version }} \
-            -t ghcr.io/${{ github.repository_owner }}/todo-api:latest \
-            .
-          docker build --target updater \
-            -t ghcr.io/${{ github.repository_owner }}/todo-api-updater:${{ needs.ci.outputs.version }} \
-            -t ghcr.io/${{ github.repository_owner }}/todo-api-updater:latest \
-            .
+      - name: Build and push API image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: production
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/todo-api:${{ needs.ci.outputs.version }}
+            ghcr.io/${{ github.repository_owner }}/todo-api:latest
+          cache-from: type=gha,scope=todo-api
+          cache-to: type=gha,mode=max,scope=todo-api
 
-      - name: Push Docker image
-        run: |
-          docker push ghcr.io/${{ github.repository_owner }}/todo-api:${{ needs.ci.outputs.version }}
-          docker push ghcr.io/${{ github.repository_owner }}/todo-api:latest
-          docker push ghcr.io/${{ github.repository_owner }}/todo-api-updater:${{ needs.ci.outputs.version }}
-          docker push ghcr.io/${{ github.repository_owner }}/todo-api-updater:latest
+      - name: Build and push updater image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: updater
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/todo-api-updater:${{ needs.ci.outputs.version }}
+            ghcr.io/${{ github.repository_owner }}/todo-api-updater:latest
+          cache-from: |
+            type=gha,scope=todo-api
+            type=gha,scope=todo-api-updater
+          cache-to: type=gha,mode=max,scope=todo-api-updater

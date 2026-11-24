@@ -162,6 +162,37 @@ export function requireTodoOwnership(todoService: TodoService = new TodoService(
 }
 
 /**
+ * Requires access to a todo: the user may see it (TodoService.canAccessTodo). Unlike the ownership checks this is
+ * not limited to the creator once todos can be shared, so it guards everything that only needs to see the todo
+ * (reading it, taking part in its discussion).
+ * 404 when the todo does not exist (also for admins), 403 when the user may not see it.
+ * @param resolveTodoId where the todo id is, by default the route parameter todoId; must run after the validation
+ */
+export function requireTodoAccess(
+  resolveTodoId: (req: Request) => string | undefined = (req) => req.params.todoId as string | undefined,
+  todoService: TodoService = new TodoService(),
+): RequestHandler {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    const user = getAuthenticatedUser(req, res);
+    if (!user) return;
+
+    const todoId = resolveTodoId(req);
+    const todo = todoId ? await todoService.getTodoById(todoId) : undefined;
+    if (!todo) {
+      res.respondNotFound();
+      return;
+    }
+
+    if (!(await todoService.canAccessTodo(todo, user))) {
+      res.respondAuthorizationInsufficient("You are not allowed to access this todo", true);
+      return;
+    }
+
+    next();
+  };
+}
+
+/**
  * Requires ownership of the referenced todo comment or admin privileges.
  */
 export function requireTodoCommentOwnership(

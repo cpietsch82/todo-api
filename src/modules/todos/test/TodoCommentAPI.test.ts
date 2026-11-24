@@ -6,6 +6,8 @@ import { TodoAPI } from "@modules/todos/TodoAPI";
 import { User, Todo } from "@/db/schema";
 import { createAuthHeader, generateTodo, generateTodoComment, generateUser, NON_EXISTENT_UUID } from "@tests/test.helpers";
 import { getTestApp } from "@tests/integration.setup";
+import { db } from "@/db";
+import { todoComments } from "@modules/todos/schema/todo.comment.schema";
 
 describe("TodoCommentAPI", () => {
   let server: Express;
@@ -140,6 +142,54 @@ describe("TodoCommentAPI", () => {
 
       expect(response.status).toBe(400);
       expect(response.body.status).toBe("error");
+    });
+
+    it("should refuse a comment on a todo the user may not see and create nothing", async () => {
+      const otherUser = await generateUser();
+      const foreignTodo = await generateTodo(otherUser.userId, { title: "Foreign Todo" });
+
+      const response = await request(server)
+        .post("/api/todo-comments")
+        .set(await createAuthHeader(testUser))
+        .send({ commentRecord: { todoId: foreignTodo.todoId, comment: "Sneaked in" } });
+
+      expect(response.status).toBe(403);
+      expect(response.text).toBe("You are not allowed to access this todo");
+      expect(await db.select().from(todoComments)).toHaveLength(0);
+    });
+
+    it("should return 404 for a todo that does not exist", async () => {
+      const response = await request(server)
+        .post("/api/todo-comments")
+        .set(await createAuthHeader(testUser))
+        .send({ commentRecord: { todoId: NON_EXISTENT_UUID, comment: "Into the void" } });
+
+      expect(response.status).toBe(404);
+      expect(await db.select().from(todoComments)).toHaveLength(0);
+    });
+
+    it("should let an admin comment on the todo of another user", async () => {
+      const admin = await generateUser();
+
+      const response = await request(server)
+        .post("/api/todo-comments")
+        .set(await createAuthHeader(admin, { role: "admin" }))
+        .send({ commentRecord: { todoId: testTodo.todoId, comment: "Admin note" } });
+
+      expect(response.status).toBe(201);
+      expect(response.body).toMatchObject({ todoId: testTodo.todoId, userId: admin.userId });
+    });
+
+    it("should store the authenticated user as author, not a userId from the body", async () => {
+      const otherUser = await generateUser();
+
+      const response = await request(server)
+        .post("/api/todo-comments")
+        .set(await createAuthHeader(testUser))
+        .send({ commentRecord: { todoId: testTodo.todoId, comment: "Mine", userId: otherUser.userId } });
+
+      expect(response.status).toBe(201);
+      expect(response.body.userId).toBe(testUser.userId);
     });
 
     it("should reject a request with a missing commentRecord body", async () => {

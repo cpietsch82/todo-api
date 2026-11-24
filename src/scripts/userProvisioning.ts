@@ -90,7 +90,8 @@ export function parseCreateUserArgs(argv: string[]): CreateUserOptions | "help" 
   const extraRoles = (values.role ?? []).flatMap((role) => role.split(",")).map((role) => role.trim()).filter(Boolean);
 
   return {
-    email: values.email.trim(),
+    // the same normalization as the api (emailSchema), otherwise the lookup of an existing user misses it
+    email: values.email.trim().toLowerCase(),
     username: values.username?.trim(),
     firstName: values["first-name"]?.trim(),
     lastName: values["last-name"]?.trim(),
@@ -129,7 +130,7 @@ export async function provisionUser(
     .where(eq(users.email, options.email))
     .limit(1);
 
-  let newUser: { username: string; firstName?: string; lastName?: string; password: string } | undefined;
+  let newUser: { username: string; firstName?: string | null; lastName?: string | null; password: string } | undefined;
   if (existing) {
     if (options.username || options.firstName || options.lastName) {
       throw new UsageError(
@@ -152,10 +153,11 @@ export async function provisionUser(
     const checkedPassword = registerSchema.shape.password.safeParse(password);
     if (!checkedPassword.success) throw new UsageError(`password: ${checkedPassword.error.issues[0].message}`);
 
+    // the normalized values (trimmed, unicode form, empty name as null), the same as a registration stores
     newUser = {
-      username: options.username,
-      firstName: options.firstName,
-      lastName: options.lastName,
+      username: profile.data.username,
+      firstName: profile.data.firstName,
+      lastName: profile.data.lastName,
       password: await hashPassword(checkedPassword.data),
     };
   }

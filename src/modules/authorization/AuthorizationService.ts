@@ -14,8 +14,8 @@ import {
 
 const DEFAULT_ROLE_NAME: RoleName = "user";
 
-/** the database or a running transaction, both can run the read queries */
-type Executor = Pick<typeof db, "select">;
+/** the database or a running transaction of it, both can run these queries */
+type Executor = Pick<typeof db, "select" | "insert">;
 
 /** A role of the database with the permissions it grants. */
 export interface RoleDefinition {
@@ -45,11 +45,14 @@ export class AuthorizationService extends BaseModule {
     return AuthorizationService.instance;
   }
 
-  async assignRoleToUser(userId: string, roleName: RoleName): Promise<void> {
-    const [role] = await db.select({ roleId: roles.roleId }).from(roles).where(eq(roles.name, roleName)).limit(1);
+  /**
+   * @param executor the running transaction, so the role is assigned together with other changes (e.g. the registration)
+   */
+  async assignRoleToUser(userId: string, roleName: RoleName, executor: Executor = db): Promise<void> {
+    const [role] = await executor.select({ roleId: roles.roleId }).from(roles).where(eq(roles.name, roleName)).limit(1);
     if (!role) throw new Error(`ROLE_NOT_FOUND:${roleName}`);
 
-    await db.insert(userRoles).values({ userId, roleId: role.roleId }).onConflictDoNothing();
+    await executor.insert(userRoles).values({ userId, roleId: role.roleId }).onConflictDoNothing();
   }
 
   async ensureDefaultRoleAssignment(userId: string): Promise<void> {
