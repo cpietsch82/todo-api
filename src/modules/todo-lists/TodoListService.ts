@@ -74,12 +74,14 @@ export class TodoListService extends BaseModule {
     }));
   }
 
-  async getListSummary(list: TodoList, myRole: ListRole): Promise<TodoListSummary> {
-    const [{ todoCount, memberCount }] = await db
+  /** @returns undefined when the list does not exist (anymore) */
+  async getListSummary(list: TodoList, myRole: ListRole): Promise<TodoListSummary | undefined> {
+    const [counts] = await db
       .select({ todoCount: todoCountOfList, memberCount: memberCountOfList })
       .from(todoLists)
       .where(eq(todoLists.listId, list.listId));
-    return { ...list, myRole, todoCount, memberCount };
+    if (!counts) return undefined;
+    return { ...list, myRole, ...counts };
   }
 
   async countListsOwnedBy(userId: string): Promise<number> {

@@ -47,8 +47,9 @@ export class UserService extends BaseModule {
    * Deletes a user. Own lists are deleted (their todos go back to their creators), own todos without a list are
    * deleted. Todos of the user in lists of others stay there without creator (todos.user_id SET NULL).
    * The order matters: deleting the own lists turns the own todos in them into todos without a list first.
+   * @returns undefined when the user does not exist (anymore), e.g. deleted by a concurrent request
    */
-  async deleteUser(userId: string): Promise<User> {
+  async deleteUser(userId: string): Promise<User | undefined> {
     return withRetryOnDeadlock(() =>
       db.transaction(async (tx) => {
         // lock order of the spec (7.1): the user row, the own lists ordered by id, then the own todos ordered by id.

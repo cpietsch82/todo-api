@@ -195,6 +195,37 @@ describe("TodoListAPI", () => {
       expect(response.body).toMatchObject({ name: "Baumarkt", myRole: "owner", todoCount: 0, memberCount: 1 });
     });
 
+    it("should answer 404 when the list vanished right before its summary is read", async () => {
+      const list = await createList(owner.userId);
+      const header = await createAuthHeader(owner);
+      // deleted by someone else after the role check (GET) or after the update (PATCH)
+      vi.spyOn(TodoListService.prototype, "getListRole").mockImplementation(async () => {
+        await db.delete(todoLists).where(eq(todoLists.listId, list.listId));
+        return "owner";
+      });
+
+      const response = await request(server).get(`/api/todo-lists/${list.listId}`).set(header);
+
+      expect(response.status).toBe(404);
+    });
+
+    it("should answer 404 when the list vanished between PATCH and its summary", async () => {
+      const list = await createList(owner.userId);
+      const update = TodoListService.prototype.updateList;
+      vi.spyOn(TodoListService.prototype, "updateList").mockImplementation(async function (this: TodoListService, ...args) {
+        const updated = await update.apply(this, args);
+        await db.delete(todoLists).where(eq(todoLists.listId, list.listId));
+        return updated;
+      });
+
+      const response = await request(server)
+        .patch(`/api/todo-lists/${list.listId}`)
+        .set(await createAuthHeader(owner))
+        .send({ updates: { name: "Weg" } });
+
+      expect(response.status).toBe(404);
+    });
+
     it("should answer 404 when the list vanished before PATCH or DELETE", async () => {
       const list = await createList(owner.userId);
       const header = await createAuthHeader(owner);

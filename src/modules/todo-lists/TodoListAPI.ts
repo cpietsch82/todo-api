@@ -85,7 +85,10 @@ export class TodoListAPI extends APIModule {
   }
 
   private async getList(req: Request, res: Response) {
-    res.json(await this.todoListService.getListSummary(req.todoList!, req.listRole!));
+    const summary = await this.todoListService.getListSummary(req.todoList!, req.listRole!);
+    // deleted after requireListRole found it
+    if (!summary) throw HttpError.notFound();
+    res.json(summary);
   }
 
   private async updateList(req: TypedRequestBody<UpdateTodoListBody>, res: Response) {
@@ -93,7 +96,10 @@ export class TodoListAPI extends APIModule {
     const list = await this.todoListService.updateList(req.todoList!.listId, { name, description });
     // deleted after requireListRole found it
     if (!list) throw HttpError.notFound();
-    res.json(await this.todoListService.getListSummary(list, req.listRole!));
+    const summary = await this.todoListService.getListSummary(list, req.listRole!);
+    // deleted right after the update
+    if (!summary) throw HttpError.notFound();
+    res.json(summary);
   }
 
   private async deleteList(req: Request, res: Response) {
