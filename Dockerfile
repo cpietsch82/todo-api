@@ -25,7 +25,10 @@ RUN apk add --no-cache docker-cli docker-cli-compose
 
 WORKDIR /app
 
+# the image always starts as production, so the safety checks of env.ts (no EXPOSE_ERROR_DETAILS, strong secrets)
+# cannot be switched off by a missing APP_STAGE in .env.api; without it env.ts would fall back to "dev"
 ENV NODE_ENV=production
+ENV APP_STAGE=production
 
 COPY package*.json ./
 RUN npm ci --omit=dev
@@ -44,7 +47,10 @@ LABEL org.opencontainers.image.source="https://github.com/cpietsch82/todo-api"
 
 WORKDIR /app
 
+# the image always starts as production, so the safety checks of env.ts (no EXPOSE_ERROR_DETAILS, strong secrets)
+# cannot be switched off by a missing APP_STAGE in .env.api; without it env.ts would fall back to "dev"
 ENV NODE_ENV=production
+ENV APP_STAGE=production
 
 COPY package*.json ./
 RUN npm ci --omit=dev

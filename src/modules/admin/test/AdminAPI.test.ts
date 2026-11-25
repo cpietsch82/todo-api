@@ -102,7 +102,8 @@ describe("AdminAPI", () => {
       const response = await request(server).get("/api/admin/version").set(await loginAs(testUser, ["admin"]));
 
       expect(response.status).toBe(403);
-      expect(response.text).toBe("Missing permissions: admin:docker:status");
+      // the client does not learn which permission is missing
+      expect(response.text).toBe("Insufficient Permissions!");
     });
   });
 
@@ -209,7 +210,7 @@ describe("AdminAPI", () => {
       const response = await request(server).post(`/api/admin/deployments/${action}`).set(authHeader).send(body);
 
       expect(response.status).toBe(403);
-      expect(response.text).toBe(`Missing permissions: admin:docker:${action}`);
+      expect(response.text).toBe("Insufficient Permissions!");
     });
 
     it("should let a user with the status permission only read", async () => {
@@ -495,7 +496,7 @@ describe("AdminAPI", () => {
         const response = await request(server).get("/api/admin/containers/postgres/logs").set(await createAuthHeader(testUser));
 
         expect(response.status).toBe(403);
-        expect(response.text).toBe("Missing permissions: admin:docker:logs");
+        expect(response.text).toBe("Insufficient Permissions!");
       });
     });
   });

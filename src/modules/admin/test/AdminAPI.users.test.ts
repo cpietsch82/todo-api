@@ -203,7 +203,8 @@ describe("AdminAPI users and roles", () => {
             .send({ roles: ["user", "admin", "deployer"].filter((role) => role !== "admin" || user === admin) });
 
           expect(response.status).toBe(403);
-          expect(response.text).toBe("Only a deployer may grant or revoke the role deployer");
+          // the rule itself stays in the log, the client gets the generic text
+          expect(response.text).toBe("Insufficient Permissions!");
         }
         expect(await rolesOf(other)).toEqual(["user"]);
         expect(await rolesOf(admin)).toEqual(["admin", "user"]);

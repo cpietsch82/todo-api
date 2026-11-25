@@ -154,7 +154,7 @@ describe("TodoCommentAPI", () => {
         .send({ commentRecord: { todoId: foreignTodo.todoId, comment: "Sneaked in" } });
 
       expect(response.status).toBe(403);
-      expect(response.text).toBe("You are not allowed to access this todo");
+      expect(response.text).toBe("Insufficient Permissions!");
       expect(await db.select().from(todoComments)).toHaveLength(0);
     });
 

@@ -26,6 +26,9 @@ describe("ExpressAPI", () => {
     open.get("/respond-error-custom", (_req: Request, res: Response) => res.respondError("teapot", 418, true));
     open.get("/respond-401", (_req: Request, res: Response) => res.respondAuthorizationRequired());
     open.get("/respond-403", (_req: Request, res: Response) => res.respondAuthorizationInsufficient());
+    open.get("/respond-403-detailed", (_req: Request, res: Response) =>
+      res.respondAuthorizationInsufficient("Missing permissions: secret:permission", true),
+    );
     open.get("/respond-missing-parameter", (_req: Request, res: Response) => res.respondMissingParameter("userId"));
     open.get("/respond-missing-body", (_req: Request, res: Response) => res.respondMissingBody());
     open.get("/respond-invalid-parameter", (_req: Request, res: Response) =>
@@ -367,7 +370,8 @@ describe("ExpressAPI", () => {
       const response = await request(server).get("/api/express-test/throw-with-status");
 
       expect(response.status).toBe(403);
-      expect(response.text).toBe("Forbidden");
+      // every 403 gets the same generic text, whatever produced it
+      expect(response.text).toBe("Insufficient Permissions!");
       expect(response.headers["x-error-id"]).toBeUndefined();
     });
 
@@ -401,7 +405,6 @@ describe("ExpressAPI", () => {
 
     it("should expose the message of an HttpError with its status", async () => {
       const cases = [
-        ["throw-http-error", 403, "not allowed here"],
         ["throw-http-error-conflict", 409, "already taken"],
         ["throw-http-error-unauthorized", 401, "who are you"],
         ["throw-http-error-not-found", 404, "no such thing"],
@@ -415,6 +418,13 @@ describe("ExpressAPI", () => {
         expect(response.text).toBe(message);
         expect(response.headers["x-error-id"]).toBeUndefined();
       }
+    });
+
+    it("should hide the message of a 403 HttpError behind a generic text", async () => {
+      const response = await request(server).get("/api/express-test/throw-http-error");
+
+      expect(response.status).toBe(403);
+      expect(response.text).toBe("Insufficient Permissions!");
     });
 
     it("should map a unique violation to 409 without leaking the query", async () => {
@@ -539,6 +549,35 @@ describe("ExpressAPI", () => {
       const response = await request(server).get("/api/express-test/respond-403");
 
       expect(response.status).toBe(403);
+    });
+
+    describe("respondAuthorizationInsufficient and the reason of the denial", () => {
+      it("should send only a generic text, so the client does not learn which permission is missing", async () => {
+        const response = await request(server).get("/api/express-test/respond-403-detailed");
+
+        expect(response.status).toBe(403);
+        expect(response.text).toBe("Insufficient Permissions!");
+      });
+
+      it("should log the real reason, so it can still be looked up", async () => {
+        const spy = vi.spyOn(logger, "warn");
+
+        await request(server).get("/api/express-test/respond-403-detailed");
+
+        expect(spy).toHaveBeenCalledWith(
+          expect.objectContaining({ reason: "Missing permissions: secret:permission", path: "/api/express-test/respond-403-detailed" }),
+          "Access denied",
+        );
+      });
+
+      it("should send the real reason with EXPOSE_ERROR_DETAILS enabled", async () => {
+        vi.spyOn(env, "EXPOSE_ERROR_DETAILS", "get").mockReturnValue(true);
+
+        const response = await request(server).get("/api/express-test/respond-403-detailed");
+
+        expect(response.status).toBe(403);
+        expect(response.text).toBe("Missing permissions: secret:permission");
+      });
     });
 
     it("respondMissingParameter should return 400 with the parameter name", async () => {

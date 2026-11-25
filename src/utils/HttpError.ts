@@ -1,4 +1,10 @@
 /**
+ * The only text a client gets for a 403 unless EXPOSE_ERROR_DETAILS is enabled, so a response does not reveal which
+ * permission or rule denied the request (see respondAuthorizationInsufficient in the ExpressAPI).
+ */
+export const INSUFFICIENT_PERMISSIONS_MESSAGE = "Insufficient Permissions!";
+
+/**
  * Error with an http status and a message that is safe to be shown to the client.
  *
  * Only the message of an HttpError is sent back by the global error handler,
@@ -21,7 +27,7 @@ export class HttpError extends Error {
     return new HttpError(401, message, cause);
   }
 
-  static forbidden(message = "Insufficient Permissions!", cause?: unknown) {
+  static forbidden(message = INSUFFICIENT_PERMISSIONS_MESSAGE, cause?: unknown) {
     return new HttpError(403, message, cause);
   }
 

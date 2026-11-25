@@ -55,7 +55,7 @@ Validated at startup in `env.ts` (the process exits when something is missing or
 
 | Variable | Description |
 |---|---|
-| `APP_STAGE` | `dev`, `test` or `production` |
+| `APP_STAGE` | `dev`, `test` or `production` (default `dev`; the docker image sets `production`) |
 | `PORT` | Port of the API (default `3000`) |
 | `DATABASE_URL` | Must start with `postgresql://` (not needed for tests) |
 | `ALLOWED_ORIGINS` | Comma separated list of allowed CORS origins |
@@ -72,7 +72,7 @@ Validated at startup in `env.ts` (the process exits when something is missing or
 | `TOKEN_RATE_LIMIT_MAX` / `TOKEN_RATE_LIMIT_WINDOW_MS` | Requests to `/auth/refresh` and `/auth/logout` per IP within the window, each route counted separately (default `60` per 15 minutes) |
 | `REGISTER_RATE_LIMIT_MAX` / `REGISTER_RATE_LIMIT_WINDOW_MS` | Registrations per IP within the window (default `5` per hour) |
 | `DOCKER_OPERATION_RATE_LIMIT_MAX` / `DOCKER_OPERATION_RATE_LIMIT_WINDOW_MS` | Docker operations (pull, deploy, restart) per IP within the window (default `10` per 15 minutes) |
-| `EXPOSE_ERROR_DETAILS` | Developer flag (default `false`): responses contain the complete error message and stack trace of unexpected errors. The API refuses to start with it when `APP_STAGE=production` |
+| `EXPOSE_ERROR_DETAILS` | Developer flag (default `false`): responses contain the complete error message and stack trace of unexpected errors, and a 403 names its reason (e.g. the missing permission). Without it every 403 answers only `Insufficient Permissions!` and the reason is logged (`Access denied`). The API refuses to start with it when `APP_STAGE=production` |
 | `RATE_LIMIT_PER_IP` / `RATE_LIMIT_WINDOW_MS` | Requests per IP (min. 100) within the time window |
 
 The Postgres container reads `POSTGRES_USER`, `POSTGRES_PASSWORD` and `POSTGRES_DB` from `.env.database`,
@@ -292,12 +292,15 @@ of `ExpressAPI` (`respondBadRequest`, `respondConflict`, `respondAuthorizationRe
 
 - Throw an `HttpError` (`src/utils/HttpError.ts`, e.g. `HttpError.conflict("...")`) when the message is meant for the client.
 - Unique and foreign key violations of the database are mapped to 409 and 400 without exposing the query.
+- Every 403 answers only `Insufficient Permissions!`, also for `HttpError.forbidden("...")` and the permission
+  middleware, so a response does not reveal which permission or rule is missing. The reason is logged as `Access denied`.
 - Every other error is answered with a generic text. For 5xx errors it contains an error id
   (`Internal Server Error (Error ID: ...)`, also sent as `X-Error-ID` header) which can be looked up in the logs.
 - Logged errors are cleaned by the serializer in `src/utils/logger.ts`: the values of failed database queries
   (e.g. emails or password hashes) are replaced by `[REDACTED]`, and common secret fields (`password`, `token`,
   `refreshToken`, `authorization`, ...) are censored when they are logged as part of an object.
-- For development set `EXPOSE_ERROR_DETAILS=true` to receive the complete message and stack trace in the response.
+- For development set `EXPOSE_ERROR_DETAILS=true` to receive the complete message and stack trace in the response,
+  and the reason of a 403.
 
 ## Authentication
 
