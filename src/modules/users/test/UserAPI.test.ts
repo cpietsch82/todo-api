@@ -1,18 +1,19 @@
-import { describe, it, expect, beforeAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 import request from "supertest";
-import type { Express } from "express";
+import type { Server } from "node:http";
 import { UserAPI } from "@modules/users/UserAPI";
+import UserService from "@modules/users/UserService";
 import { User } from "@/db/schema";
 import { createAuthHeader, generateUser, NON_EXISTENT_UUID } from "@tests/test.helpers";
-import { getTestApp } from "@tests/integration.setup";
+import { getTestServer } from "@tests/integration.setup";
 
 describe("UserAPI", () => {
-  let server: Express;
+  let server: Server;
   let testUser: User;
 
   beforeAll(async () => {
     new UserAPI();
-    server = getTestApp();
+    server = getTestServer();
   });
 
   beforeEach(async () => {
@@ -208,6 +209,17 @@ describe("UserAPI", () => {
   // DELETE /api/users/:userId
   // ---------------------------------------------------------------------------
   describe("DELETE /api/users/:userId", () => {
+    it("should answer 404 when the user was deleted by a concurrent request meanwhile", async () => {
+      vi.spyOn(UserService.prototype, "deleteUser").mockResolvedValueOnce(undefined);
+
+      const response = await request(server)
+        .delete(`/api/users/${testUser.userId}`)
+        .set(await createAuthHeader(testUser));
+
+      expect(response.status).toBe(404);
+      vi.restoreAllMocks();
+    });
+
     it("should delete an existing user and return the deleted record", async () => {
       const authHeader = await createAuthHeader(testUser);
 

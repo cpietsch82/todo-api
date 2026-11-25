@@ -3,14 +3,14 @@ import http from "http";
 import request from "supertest";
 import env from "../../../../env";
 import { getTestApp } from "@tests/integration.setup";
+import { listenOnLoopback } from "@tests/supertest.loopback";
 
 describe("ExpressAPI rate limit", () => {
   let server: http.Server;
 
   beforeAll(async () => {
     // one server for all requests, because a few hundred requests are sent
-    server = http.createServer(getTestApp()).listen(0);
-    await new Promise<void>((resolve) => server.once("listening", resolve));
+    server = await listenOnLoopback(getTestApp());
   });
 
   afterAll(async () => {

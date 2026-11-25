@@ -1,17 +1,17 @@
 import { describe, it, expect, beforeAll, beforeEach } from "vitest";
 import request from "supertest";
-import type { Express } from "express";
+import type { Server } from "node:http";
 import { AdminAPI } from "@modules/admin/AdminAPI";
 import { UserAPI } from "@modules/users/UserAPI";
 import AuthorizationService from "@modules/authorization/AuthorizationService";
 import { getPermissionsForRoles, type UserRole } from "@modules/authorization/permissions";
 import { createAuthHeader, generateUser, NON_EXISTENT_UUID } from "@tests/test.helpers";
-import { getTestApp } from "@tests/integration.setup";
+import { getTestServer } from "@tests/integration.setup";
 import type { User } from "@/db/schema";
 
 describe("AdminAPI users and roles", () => {
   const authorizationService = new AuthorizationService();
-  let server: Express;
+  let server: Server;
   let admin: User;
   let other: User;
 
@@ -29,7 +29,7 @@ describe("AdminAPI users and roles", () => {
   beforeAll(() => {
     new AdminAPI();
     new UserAPI();
-    server = getTestApp();
+    server = getTestServer();
   });
 
   beforeEach(async () => {
@@ -203,7 +203,8 @@ describe("AdminAPI users and roles", () => {
             .send({ roles: ["user", "admin", "deployer"].filter((role) => role !== "admin" || user === admin) });
 
           expect(response.status).toBe(403);
-          expect(response.text).toBe("Only a deployer may grant or revoke the role deployer");
+          // the rule itself stays in the log, the client gets the generic text
+          expect(response.text).toBe("Insufficient Permissions!");
         }
         expect(await rolesOf(other)).toEqual(["user"]);
         expect(await rolesOf(admin)).toEqual(["admin", "user"]);

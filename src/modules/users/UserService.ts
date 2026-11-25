@@ -1,7 +1,11 @@
 import { db } from "@/db";
-import { AnyColumn, asc, eq, SQLWrapper } from "drizzle-orm";
+import { AnyColumn, and, asc, eq, isNull, SQLWrapper } from "drizzle-orm";
 import { BaseModule } from "../core/BaseModule";
 import { users, type NewUser, type UpdateUser, type User } from "./schema/user.schema";
+import { todos } from "@/modules/todos/schema/todo.schema";
+import { todoLists } from "@/modules/todo-lists/schema/todo-list.schema";
+import { TodoListService } from "@/modules/todo-lists/TodoListService";
+import { withRetryOnDeadlock } from "@/utils/dbErrors";
 
 export class UserService extends BaseModule {
   public static instance: UserService;
@@ -39,10 +43,36 @@ export class UserService extends BaseModule {
     return user;
   }
 
-  async deleteUser(userId: string): Promise<User> {
-    const [user] = await db.delete(users).where(eq(users.userId, userId)).returning();
+  /**
+   * Deletes a user. Own lists are deleted (their todos go back to their creators), own todos without a list are
+   * deleted. Todos of the user in lists of others stay there without creator (todos.user_id SET NULL).
+   * The order matters: deleting the own lists turns the own todos in them into todos without a list first.
+   * @returns undefined when the user does not exist (anymore), e.g. deleted by a concurrent request
+   */
+  async deleteUser(userId: string): Promise<User | undefined> {
+    return withRetryOnDeadlock(() =>
+      db.transaction(async (tx) => {
+        // lock order of the spec (7.1): the user row, the own lists ordered by id, then the own todos ordered by id.
+        // New todos and lists of the user wait for the user row (their foreign key check) and fail once the user is
+        // gone; a concurrent deletion of a list waits for this transaction or this one for it, and the statements
+        // below see its result
+        await tx.select({ userId: users.userId }).from(users).where(eq(users.userId, userId)).for("update");
+        const ownLists = await tx
+          .select({ listId: todoLists.listId })
+          .from(todoLists)
+          .where(eq(todoLists.ownerId, userId))
+          .orderBy(asc(todoLists.listId))
+          .for("update");
+        await tx.select({ todoId: todos.todoId }).from(todos).where(eq(todos.userId, userId)).orderBy(asc(todos.todoId)).for("update");
 
-    return user;
+        for (const { listId } of ownLists) await new TodoListService().deleteList(listId, tx);
+
+        await tx.delete(todos).where(and(eq(todos.userId, userId), isNull(todos.listId)));
+        const [user] = await tx.delete(users).where(eq(users.userId, userId)).returning();
+
+        return user;
+      }),
+    );
   }
 }
 

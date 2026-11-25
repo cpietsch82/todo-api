@@ -1,8 +1,13 @@
 import { db } from "@/db";
-import { eq, desc } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, or } from "drizzle-orm";
 import { BaseModule } from "../core/BaseModule";
+import { HttpError } from "@/utils/HttpError";
+import { withRetryOnDeadlock } from "@/utils/dbErrors";
 import { todos, type UpdateTodo, type NewTodo, type Todo } from "@/modules/todos/schema/todo.schema";
 import { hasPermission, type Permission } from "@/modules/authorization/permissions";
+import { TodoListService } from "@/modules/todo-lists/TodoListService";
+import { hasListRole } from "@/modules/todo-lists/listRoles";
+import { todoListMembers, todoLists, type ListRole } from "@/modules/todo-lists/schema/todo-list.schema";
 
 /** the user who wants to access a todo, as the access token describes it (req.user) */
 export interface AccessingUser {
@@ -12,9 +17,11 @@ export interface AccessingUser {
 
 export class TodoService extends BaseModule {
   public static instance: TodoService;
+  protected todoListService: TodoListService;
 
   constructor() {
     super("todo.service", "Business logic for Todo management");
+    this.todoListService = new TodoListService();
 
     if (!TodoService.instance) {
       TodoService.instance = this;
@@ -22,14 +29,27 @@ export class TodoService extends BaseModule {
     return TodoService.instance;
   }
 
-  async getAllTodos(userId?: string): Promise<Todo[]> {
-    const query = db.select().from(todos);
+  /**
+   * The todos a user created and can still reach: without a list, or in a list the user owns or is a member of.
+   * Todos of others in shared lists are read with the list (TodoListService.getTodosOfList).
+   */
+  async getAllTodos(userId: string): Promise<Todo[]> {
+    const ownLists = db.select({ listId: todoLists.listId }).from(todoLists).where(eq(todoLists.ownerId, userId));
+    const memberLists = db
+      .select({ listId: todoListMembers.listId })
+      .from(todoListMembers)
+      .where(eq(todoListMembers.userId, userId));
 
-    if (userId) {
-      return query.where(eq(todos.userId, userId)).orderBy(desc(todos.createdAt));
-    }
-
-    return query.orderBy(desc(todos.createdAt));
+    return db
+      .select()
+      .from(todos)
+      .where(
+        and(
+          eq(todos.userId, userId),
+          or(isNull(todos.listId), inArray(todos.listId, ownLists), inArray(todos.listId, memberLists)),
+        ),
+      )
+      .orderBy(desc(todos.createdAt));
   }
 
   async getTodoById(todoId: string): Promise<Todo | undefined> {
@@ -39,19 +59,39 @@ export class TodoService extends BaseModule {
   }
 
   /**
-   * The one rule who may see a todo. Everything that depends on seeing a todo uses it: reading the todo and taking
-   * part in its discussion (writing and, later, reading its comments). Changing or deleting a todo stays with its
-   * creator (requireTodoOwnership).
-   *
-   * Today a todo is only visible to its creator and to admins. It is async on purpose: the extension for sharing
-   * will need a database query.
+   * The rules who may see, change and delete a todo. A todo in a list follows the role in that list only (its
+   * creator has no extra rights there); a todo without list belongs to its creator. Admins may do everything.
+   * Everything that depends on seeing a todo uses canAccessTodo: reading it and taking part in its discussion.
    */
-  async canAccessTodo(todo: Pick<Todo, "userId">, user: AccessingUser): Promise<boolean> {
-    if (hasPermission(user.permissions, "admin:all")) return true;
+  async canAccessTodo(todo: Pick<Todo, "userId" | "listId">, user: AccessingUser): Promise<boolean> {
+    if (todo.listId) return (await this.getRoleInListOf(todo.listId, user)) !== undefined;
+    return this.isCreatorOrAdmin(todo, user);
+  }
 
-    // TODO(sharing): also allow the users a todo or its list is shared with, as soon as todos/lists can be shared
-    // (TODOS.txt "Todo Listen" / "Listen auch sharen"). Reading the todo and commenting on it follow automatically.
-    return todo.userId === user.id;
+  /** Changing a todo: in a list at least editor, otherwise its creator. */
+  async canEditTodo(todo: Pick<Todo, "userId" | "listId">, user: AccessingUser): Promise<boolean> {
+    if (todo.listId) return hasListRole(await this.getRoleInListOf(todo.listId, user), "editor");
+    return this.isCreatorOrAdmin(todo, user);
+  }
+
+  /**
+   * Deleting a todo, and taking it out of its list: in a list the owner, or an editor who created it; otherwise its
+   * creator.
+   */
+  async canDeleteTodo(todo: Pick<Todo, "userId" | "listId">, user: AccessingUser): Promise<boolean> {
+    if (!todo.listId) return this.isCreatorOrAdmin(todo, user);
+
+    const role = await this.getRoleInListOf(todo.listId, user);
+    return role === "owner" || (role === "editor" && todo.userId === user.id);
+  }
+
+  private isCreatorOrAdmin(todo: Pick<Todo, "userId">, user: AccessingUser): boolean {
+    return hasPermission(user.permissions, "admin:all") || (todo.userId !== null && todo.userId === user.id);
+  }
+
+  private async getRoleInListOf(listId: string, user: AccessingUser): Promise<ListRole | undefined> {
+    const list = await this.todoListService.getListById(listId);
+    return list ? this.todoListService.getListRole(list, user) : undefined;
   }
 
   async createTodo(data: NewTodo): Promise<Todo> {
@@ -60,20 +100,34 @@ export class TodoService extends BaseModule {
     return todo;
   }
 
-  async updateTodo(todoId: string, updateData: UpdateTodo): Promise<Todo> {
-    const [todo] = await db
-      .update(todos)
-      .set({
-        ...updateData,
-        updatedAt: new Date(),
-      })
-      .where(eq(todos.todoId, todoId))
-      .returning();
+  /**
+   * Updates a todo under a lock of its row, so a concurrent deletion of its creator or its list cannot interleave:
+   * a todo whose creator was deleted cannot leave its list (it would belong to nobody, chk_todos_owner_or_list).
+   * @returns undefined when the todo does not exist (anymore)
+   * @throws HttpError 409 when a todo without creator should leave its list
+   */
+  async updateTodo(todoId: string, updateData: UpdateTodo): Promise<Todo | undefined> {
+    return withRetryOnDeadlock(() =>
+      db.transaction(async (tx) => {
+        const [current] = await tx.select({ userId: todos.userId }).from(todos).where(eq(todos.todoId, todoId)).for("update");
+        if (!current) return undefined;
 
-    return todo;
+        if (updateData.listId === null && current.userId === null) {
+          throw HttpError.conflict("A todo of a deleted user cannot leave its list");
+        }
+
+        const [todo] = await tx
+          .update(todos)
+          .set({ ...updateData, updatedAt: new Date() })
+          .where(eq(todos.todoId, todoId))
+          .returning();
+        return todo;
+      }),
+    );
   }
 
-  async deleteTodo(todoId: string): Promise<Todo> {
+  /** @returns undefined when the todo does not exist (anymore) */
+  async deleteTodo(todoId: string): Promise<Todo | undefined> {
     const [todo] = await db.delete(todos).where(eq(todos.todoId, todoId)).returning();
 
     return todo;

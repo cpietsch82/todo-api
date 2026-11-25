@@ -3,6 +3,7 @@ import { relations, sql } from "drizzle-orm";
 import { todos } from "@/modules/todos/schema/todo.schema";
 import { createInsertSchema } from "drizzle-zod";
 import z from "zod";
+import { NO_CONTROL_CHARACTERS } from "@/utils/textPatterns";
 import { authentications } from "@/db/schema";
 
 // DB Schema
@@ -63,8 +64,6 @@ export const usernameSchema = z
   .max(50, "Username must not be longer than 50 characters")
   .regex(USERNAME_PATTERN, "Username may only contain latin letters, digits, dot, underscore and hyphen");
 
-// no control or invisible formatting characters (e.g. NUL, zero width space, right-to-left override)
-const NO_CONTROL_CHARACTERS = /^[^\p{Cc}\p{Cf}]*$/u;
 
 /** First or last name: any script, trimmed, at most 50 characters; an empty name is stored as null. */
 const personNameSchema = z

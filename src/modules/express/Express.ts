@@ -18,6 +18,7 @@ import { requireAuthentication } from "@/middleware/permissions";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { VersionService } from "./VersionService";
+import { INSUFFICIENT_PERMISSIONS_MESSAGE } from "@/utils/HttpError";
 
 // Extend Express's Response type to include custom response methods
 declare global {
@@ -256,8 +257,19 @@ export class ExpressAPI extends BaseModule {
       this.respondError(req, res, message, status, returnMessage);
     res.respondAuthorizationRequired = (message = "Authorization required!", returnMessage = false) =>
       res.respondError(message, 401, returnMessage);
-    res.respondAuthorizationInsufficient = (message = "Insufficient Permissions!", returnMessage = false) =>
-      res.respondError(message, 403, returnMessage);
+    // the reason of a 403 (e.g. which permission is missing) would reveal the permission model to the client, so it
+    // is only logged; the developer flag EXPOSE_ERROR_DETAILS (not possible in production) sends it as well
+    res.respondAuthorizationInsufficient = (message = INSUFFICIENT_PERMISSIONS_MESSAGE, returnMessage = false) => {
+      if (env.EXPOSE_ERROR_DETAILS) return res.respondError(message, 403, returnMessage);
+
+      if (message !== INSUFFICIENT_PERMISSIONS_MESSAGE) {
+        this.logger.warn(
+          { reason: message, userId: req.user?.id, path: req.baseUrl + req.path, method: req.method },
+          "Access denied",
+        );
+      }
+      return res.respondError(INSUFFICIENT_PERMISSIONS_MESSAGE, 403, returnMessage);
+    };
     // the messages of the following helpers are always written by us, so they are sent by default
     res.respondBadRequest = (message = "Bad request", returnMessage = true) =>
       res.respondError(message, 400, returnMessage);

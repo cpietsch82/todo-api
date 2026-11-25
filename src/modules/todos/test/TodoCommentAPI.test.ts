@@ -1,23 +1,23 @@
 import { describe, it, expect, beforeAll, beforeEach } from "vitest";
 import request from "supertest";
-import type { Express } from "express";
+import type { Server } from "node:http";
 import { TodoCommentAPI } from "@modules/todos/TodoCommentAPI";
 import { TodoAPI } from "@modules/todos/TodoAPI";
 import { User, Todo } from "@/db/schema";
 import { createAuthHeader, generateTodo, generateTodoComment, generateUser, NON_EXISTENT_UUID } from "@tests/test.helpers";
-import { getTestApp } from "@tests/integration.setup";
+import { getTestServer } from "@tests/integration.setup";
 import { db } from "@/db";
 import { todoComments } from "@modules/todos/schema/todo.comment.schema";
 
 describe("TodoCommentAPI", () => {
-  let server: Express;
+  let server: Server;
   let testUser: User;
   let testTodo: Todo;
 
   beforeAll(async () => {
     new TodoAPI();
     new TodoCommentAPI();
-    server = getTestApp();
+    server = getTestServer();
   });
 
   beforeEach(async () => {
@@ -154,7 +154,7 @@ describe("TodoCommentAPI", () => {
         .send({ commentRecord: { todoId: foreignTodo.todoId, comment: "Sneaked in" } });
 
       expect(response.status).toBe(403);
-      expect(response.text).toBe("You are not allowed to access this todo");
+      expect(response.text).toBe("Insufficient Permissions!");
       expect(await db.select().from(todoComments)).toHaveLength(0);
     });
 

@@ -1,10 +1,10 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import request from "supertest";
-import type { Express } from "express";
+import type { Server } from "node:http";
 import bcrypt from "bcrypt";
 import { eq } from "drizzle-orm";
 import { AuthenticationAPI } from "../AuthenticationAPI";
-import { getTestApp } from "@tests/integration.setup";
+import { getTestServer } from "@tests/integration.setup";
 import { db } from "@/db";
 import { users } from "@/db/schema";
 import { updateUserSchema } from "@/modules/users/schema/user.schema";
@@ -17,11 +17,11 @@ const PAYLOAD = {
 };
 
 describe("Normalization of e-mail and username", () => {
-  let server: Express;
+  let server: Server;
 
   beforeAll(() => {
     new AuthenticationAPI();
-    server = getTestApp();
+    server = getTestServer();
   });
 
   afterEach(() => {

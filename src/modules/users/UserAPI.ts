@@ -84,6 +84,8 @@ export class UserAPI extends APIModule {
     if (!existingUser) return res.respondNotFound();
 
     const result = await this.userService.deleteUser(userId);
+    // deleted by a concurrent request after the check above
+    if (!result) return res.respondNotFound();
 
     res.json(result);
   }

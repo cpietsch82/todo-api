@@ -1,8 +1,8 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import request from "supertest";
-import type { Express } from "express";
+import type { Server } from "node:http";
 import { AuthenticationAPI } from "../AuthenticationAPI";
-import { getTestApp } from "@tests/integration.setup";
+import { getTestServer } from "@tests/integration.setup";
 import crypto from "node:crypto";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
@@ -17,11 +17,11 @@ const VALID_REGISTER_PAYLOAD = {
 };
 
 describe("AuthAPI", () => {
-  let server: Express;
+  let server: Server;
 
   beforeAll(async () => {
     new AuthenticationAPI();
-    server = getTestApp();
+    server = getTestServer();
   });
 
   // ---------------------------------------------------------------------------

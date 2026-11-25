@@ -1,22 +1,24 @@
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
 import request from "supertest";
+import type { Server } from "node:http";
 import type { Express, Request, Response } from "express";
 import { ExpressAPI } from "@modules/express/Express";
 import { VersionService } from "@modules/express/VersionService";
 import { db } from "@/db";
 import { logger } from "@/utils/logger";
 import { HttpError } from "@/utils/HttpError";
+import { DrizzleQueryError } from "drizzle-orm/errors";
 import env from "../../../../env";
 import { createAuthHeader, generateUser, UUID_REGEX } from "@tests/test.helpers";
-import { getTestApp } from "@tests/integration.setup";
+import { getTestApp, getTestServer } from "@tests/integration.setup";
 import packageJson from "../../../../package.json";
 
 describe("ExpressAPI", () => {
-  let server: Express;
+  let server: Server;
   let api: ExpressAPI;
 
   beforeAll(() => {
-    server = getTestApp();
+    server = getTestServer();
     api = new ExpressAPI();
 
     // routes without authentication, used to check the predefined response helpers
@@ -26,6 +28,9 @@ describe("ExpressAPI", () => {
     open.get("/respond-error-custom", (_req: Request, res: Response) => res.respondError("teapot", 418, true));
     open.get("/respond-401", (_req: Request, res: Response) => res.respondAuthorizationRequired());
     open.get("/respond-403", (_req: Request, res: Response) => res.respondAuthorizationInsufficient());
+    open.get("/respond-403-detailed", (_req: Request, res: Response) =>
+      res.respondAuthorizationInsufficient("Missing permissions: secret:permission", true),
+    );
     open.get("/respond-missing-parameter", (_req: Request, res: Response) => res.respondMissingParameter("userId"));
     open.get("/respond-missing-body", (_req: Request, res: Response) => res.respondMissingBody());
     open.get("/respond-invalid-parameter", (_req: Request, res: Response) =>
@@ -81,10 +86,33 @@ describe("ExpressAPI", () => {
         cause: Object.assign(new Error("duplicate key value"), { code: "23505" }),
       });
     });
+    open.get("/throw-check-violation", () => {
+      throw Object.assign(new Error("Failed query: update todos ... params: secret@mail.com"), {
+        cause: Object.assign(new Error("violates check constraint"), { code: "23514", constraint: "chk_todos_owner_or_list" }),
+      });
+    });
+    open.get("/throw-other-check-violation", () => {
+      throw Object.assign(new Error("Failed query: insert into users ..."), {
+        cause: Object.assign(new Error("violates check constraint"), { code: "23514", constraint_name: "chk_users_email_lowercase" }),
+      });
+    });
+    open.get("/throw-deadlock", () => {
+      throw Object.assign(new Error("Failed query: delete from todo_lists ..."), {
+        cause: Object.assign(new Error("deadlock detected"), { code: "40P01" }),
+      });
+    });
     open.get("/throw-foreign-key-violation", () => {
       throw Object.assign(new Error("Failed query: insert into todos ..."), {
         cause: Object.assign(new Error("violates foreign key constraint"), { code: "23503" }),
       });
+    });
+    open.get("/throw-failed-query", () => {
+      // a failed query as drizzle reports it: the values of the query are part of message and stack
+      throw new DrizzleQueryError(
+        'select * from "authentications" where "password" = $1 and "email" = $2',
+        ["$2b$10$secretPasswordHash", "jane@example.com"],
+        Object.assign(new Error("connection terminated"), { code: "57P01" }),
+      );
     });
     open.get("/throw-string", () => {
       throw "plain string failure";
@@ -129,7 +157,7 @@ describe("ExpressAPI", () => {
     });
 
     it("should expose the express app, the router and the running server", () => {
-      expect(api.getApp()).toBe(server);
+      expect(api.getApp()).toBe(getTestApp());
       expect(api.getRouter()).toBeDefined();
       expect(api.getServer()).not.toBeNull();
       expect(api.getServer()?.listening).toBe(true);
@@ -367,7 +395,8 @@ describe("ExpressAPI", () => {
       const response = await request(server).get("/api/express-test/throw-with-status");
 
       expect(response.status).toBe(403);
-      expect(response.text).toBe("Forbidden");
+      // every 403 gets the same generic text, whatever produced it
+      expect(response.text).toBe("Insufficient Permissions!");
       expect(response.headers["x-error-id"]).toBeUndefined();
     });
 
@@ -401,7 +430,6 @@ describe("ExpressAPI", () => {
 
     it("should expose the message of an HttpError with its status", async () => {
       const cases = [
-        ["throw-http-error", 403, "not allowed here"],
         ["throw-http-error-conflict", 409, "already taken"],
         ["throw-http-error-unauthorized", 401, "who are you"],
         ["throw-http-error-not-found", 404, "no such thing"],
@@ -417,12 +445,42 @@ describe("ExpressAPI", () => {
       }
     });
 
+    it("should hide the message of a 403 HttpError behind a generic text", async () => {
+      const response = await request(server).get("/api/express-test/throw-http-error");
+
+      expect(response.status).toBe(403);
+      expect(response.text).toBe("Insufficient Permissions!");
+    });
+
     it("should map a unique violation to 409 without leaking the query", async () => {
       const response = await request(server).get("/api/express-test/throw-unique-violation");
 
       expect(response.status).toBe(409);
       expect(response.text).toBe("Resource already exists");
       expect(response.text).not.toContain("secret@mail.com");
+    });
+
+    it("should map a check violation to 409 without leaking the query", async () => {
+      const response = await request(server).get("/api/express-test/throw-check-violation");
+
+      expect(response.status).toBe(409);
+      expect(response.text).toBe("Conflict with the current state, please try again");
+      expect(response.text).not.toContain("secret@mail.com");
+    });
+
+    it("should treat any other check violation as an internal error, a bug the client cannot fix by retrying", async () => {
+      const response = await request(server).get("/api/express-test/throw-other-check-violation");
+
+      expect(response.status).toBe(500);
+      expect(response.headers["x-error-id"]).toMatch(UUID_REGEX);
+    });
+
+    it("should answer a deadlock that is left after the retry with 503, so the client tries again", async () => {
+      const response = await request(server).get("/api/express-test/throw-deadlock");
+
+      expect(response.status).toBe(503);
+      expect(response.text).toBe("The database is busy, please try again");
+      expect(response.headers["x-error-id"]).toMatch(UUID_REGEX);
     });
 
     it("should map a foreign key violation to 400 without leaking the query", async () => {
@@ -495,6 +553,17 @@ describe("ExpressAPI", () => {
         expect(response.text).toContain("Failed query");
       });
 
+      it("should not send the values of a failed query, only the query with its placeholders", async () => {
+        const response = await request(server).get("/api/express-test/throw-failed-query");
+
+        expect(response.status).toBe(500);
+        expect(response.text).toContain('select * from "authentications"');
+        expect(response.text).toContain("params: [REDACTED]");
+        expect(response.text).toContain("at ");
+        expect(response.text).not.toContain("secretPasswordHash");
+        expect(response.text).not.toContain("jane@example.com");
+      });
+
       it("should keep the message of an HttpError without a stack trace", async () => {
         const response = await request(server).get("/api/express-test/throw-http-error");
 
@@ -539,6 +608,35 @@ describe("ExpressAPI", () => {
       const response = await request(server).get("/api/express-test/respond-403");
 
       expect(response.status).toBe(403);
+    });
+
+    describe("respondAuthorizationInsufficient and the reason of the denial", () => {
+      it("should send only a generic text, so the client does not learn which permission is missing", async () => {
+        const response = await request(server).get("/api/express-test/respond-403-detailed");
+
+        expect(response.status).toBe(403);
+        expect(response.text).toBe("Insufficient Permissions!");
+      });
+
+      it("should log the real reason, so it can still be looked up", async () => {
+        const spy = vi.spyOn(logger, "warn");
+
+        await request(server).get("/api/express-test/respond-403-detailed");
+
+        expect(spy).toHaveBeenCalledWith(
+          expect.objectContaining({ reason: "Missing permissions: secret:permission", path: "/api/express-test/respond-403-detailed" }),
+          "Access denied",
+        );
+      });
+
+      it("should send the real reason with EXPOSE_ERROR_DETAILS enabled", async () => {
+        vi.spyOn(env, "EXPOSE_ERROR_DETAILS", "get").mockReturnValue(true);
+
+        const response = await request(server).get("/api/express-test/respond-403-detailed");
+
+        expect(response.status).toBe(403);
+        expect(response.text).toBe("Missing permissions: secret:permission");
+      });
     });
 
     it("respondMissingParameter should return 400 with the parameter name", async () => {
