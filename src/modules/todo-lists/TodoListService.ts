@@ -44,12 +44,17 @@ export class TodoListService extends BaseModule {
 
   /**
    * The one rule which role a user has in a list. Admins count as owner of every list.
+   * @param tx read within this transaction, e.g. under the lock of the list
    * @returns undefined when the user has no role in the list
    */
-  async getListRole(list: Pick<TodoList, "listId" | "ownerId">, user: AccessingUser): Promise<ListRole | undefined> {
+  async getListRole(
+    list: Pick<TodoList, "listId" | "ownerId">,
+    user: AccessingUser,
+    tx?: DbTransaction,
+  ): Promise<ListRole | undefined> {
     if (list.ownerId === user.id || hasPermission(user.permissions, "admin:all")) return "owner";
 
-    const [member] = await db
+    const [member] = await (tx ?? db)
       .select({ role: todoListMembers.role })
       .from(todoListMembers)
       .where(and(eq(todoListMembers.listId, list.listId), eq(todoListMembers.userId, user.id)))

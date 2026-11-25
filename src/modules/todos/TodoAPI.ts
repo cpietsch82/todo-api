@@ -115,7 +115,8 @@ export class TodoAPI extends APIModule {
       userId: req.user?.id, // TODO: überlegen, ob hier dann eine RequestingEntity sinnvoll wäre!
     };
 
-    const todo = await this.todoService.createTodo(newTodo as Todo);
+    // the list rights are checked once more under the lock of the list
+    const todo = await this.todoService.createTodo(newTodo as Todo, req.user!);
     res.status(201).json(todo);
   }
 
@@ -129,7 +130,8 @@ export class TodoAPI extends APIModule {
       await this.ensureCanMove(todo, updates.listId, req.user!);
     }
 
-    const updatedTodo = await this.todoService.updateTodo(todoId, updates);
+    // a move is checked once more under the locks of both lists
+    const updatedTodo = await this.todoService.updateTodo(todoId, updates, req.user!, todo.listId);
     // deleted after the access check
     if (!updatedTodo) return res.respondNotFound();
     res.status(201).json(updatedTodo);

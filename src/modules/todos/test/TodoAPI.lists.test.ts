@@ -8,6 +8,7 @@ import { todoListMembers, todoLists, type MemberRole, type TodoList } from "@mod
 import { MAX_TODOS_PER_LIST } from "@modules/todo-lists/limits";
 import { TodoAPI } from "@modules/todos/TodoAPI";
 import { TodoService } from "@modules/todos/TodoService";
+import { TodoListService } from "@modules/todo-lists/TodoListService";
 import { TodoCommentAPI } from "@modules/todos/TodoCommentAPI";
 import { todoComments } from "@modules/todos/schema/todo.comment.schema";
 import { createAuthHeader, generateTodo, generateUser, NON_EXISTENT_UUID } from "@tests/test.helpers";
@@ -404,6 +405,83 @@ describe("TodoAPI with lists", () => {
       expect(Object.keys(response.body[0]).sort()).toEqual(
         ["createdAt", "description", "listId", "severity", "status", "tags", "title", "todoId", "updatedAt", "userId", "version"],
       );
+    });
+  });
+  describe("rights that change between the check and the write", () => {
+    /** the checks before the transaction see the given role, the checks under the lock (with tx) the database */
+    const staleRoleBeforeTheLock = (role: "editor") => {
+      const original = TodoListService.prototype.getListRole;
+      vi.spyOn(TodoListService.prototype, "getListRole").mockImplementation(async function (
+        this: TodoListService,
+        ...args: Parameters<typeof original>
+      ) {
+        return args[2] ? original.apply(this, args) : role;
+      });
+    };
+
+    it("should refuse a move when the mover lost the role in the target meanwhile", async () => {
+      const target = await createList(stranger.userId, "Fremd");
+      const todo = await generateTodo(editor.userId, { listId: list.listId });
+      staleRoleBeforeTheLock("editor");
+
+      const response = await patch(editor, todo.todoId, { listId: target.listId });
+
+      expect(response.status).toBe(403);
+      expect((await todoById(todo.todoId)).listId).toBe(list.listId);
+    });
+
+    it("should refuse a move when the mover lost the right to take it out of its list meanwhile", async () => {
+      const target = await createList(editor.userId, "Eigene");
+      const todo = await generateTodo(editor.userId, { listId: list.listId });
+      await db.delete(todoListMembers).where(eq(todoListMembers.userId, editor.userId));
+      staleRoleBeforeTheLock("editor");
+
+      const response = await patch(editor, todo.todoId, { listId: target.listId });
+
+      expect(response.status).toBe(403);
+      expect((await todoById(todo.todoId)).listId).toBe(list.listId);
+    });
+
+    it("should refuse a move when the todo was moved by someone else meanwhile", async () => {
+      const second = await createList(owner.userId, "Baumarkt");
+      const todo = await generateTodo(owner.userId, { listId: list.listId });
+      // the access check saw the todo in the first list, meanwhile it went into the second one
+      vi.spyOn(TodoService.prototype, "getTodoById").mockResolvedValue({ ...todo });
+      await db.update(todos).set({ listId: second.listId }).where(eq(todos.todoId, todo.todoId));
+
+      const response = await patch(owner, todo.todoId, { listId: null });
+
+      expect(response.status).toBe(409);
+      expect(response.text).toBe("The list changed meanwhile, please try again");
+      expect((await todoById(todo.todoId)).listId).toBe(second.listId);
+    });
+
+    it("should refuse adding to a list when the role was removed meanwhile", async () => {
+      await db.delete(todoListMembers).where(eq(todoListMembers.userId, editor.userId));
+      staleRoleBeforeTheLock("editor");
+
+      const response = await create(editor, { ...TODO, listId: list.listId });
+
+      expect(response.status).toBe(403);
+      expect(await db.select().from(todos)).toHaveLength(0);
+    });
+
+    it("should keep the limit of todos per list under the lock", async () => {
+      await db
+        .insert(todos)
+        .values(Array.from({ length: MAX_TODOS_PER_LIST }, (_, i) => ({ title: `Todo ${i}`, userId: owner.userId, listId: list.listId })));
+      // the early check counted before the list filled up
+      vi.spyOn(TodoListService.prototype, "countTodosInList").mockResolvedValue(0);
+
+      const add = await create(editor, { ...TODO, listId: list.listId });
+      const own = await generateTodo(editor.userId);
+      const move = await patch(editor, own.todoId, { listId: list.listId });
+
+      expect(add.status).toBe(409);
+      expect(add.text).toBe("List is full");
+      expect(move.status).toBe(409);
+      expect(move.text).toBe("List is full");
+      expect((await todoById(own.todoId)).listId).toBeNull();
     });
   });
 });
