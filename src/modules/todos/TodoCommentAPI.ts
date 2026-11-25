@@ -12,7 +12,13 @@ import { typedHandler } from "@/utils/typedHandler";
 import { TypedRequest, TypedRequestBody, TypedRequestParams } from "../express/Express";
 import type { Request, Response } from "express";
 import { TodoCommentService } from "./TodoCommentService";
-import { requirePermissions, requireTodoAccess, requireTodoCommentOwnership } from "@/middleware/permissions";
+import {
+  requirePermissions,
+  requireTodoAccess,
+  requireTodoCommentDeleteAccess,
+  requireTodoCommentEditAccess,
+  requireTodoCommentOwnership,
+} from "@/middleware/permissions";
 
 export class TodoCommentAPI extends APIModule {
   private static instance: TodoCommentAPI;
@@ -54,7 +60,8 @@ export class TodoCommentAPI extends APIModule {
       "/:commentId",
       validateParams(todoCommentByIdSchema),
       requirePermissions("todo-comments:update"),
-      requireCommentOwner,
+      // the author, and only while the todo is still visible to the author (e.g. not after leaving the list)
+      requireTodoCommentEditAccess(),
       validateBody(updateTodoCommentSchema),
       typedHandler(this.updateTodoComment.bind(this)),
     );
@@ -62,7 +69,8 @@ export class TodoCommentAPI extends APIModule {
       "/:commentId",
       validateParams(todoCommentByIdSchema),
       requirePermissions("todo-comments:delete"),
-      requireCommentOwner,
+      // the author or the moderator of the discussion
+      requireTodoCommentDeleteAccess(),
       typedHandler(this.deleteTodoComment.bind(this)),
     );
   }

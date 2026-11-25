@@ -1,13 +1,15 @@
 import { db } from "@/db";
-import { and, desc, eq, inArray, isNull, or } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, isNull, or } from "drizzle-orm";
 import { BaseModule } from "../core/BaseModule";
 import { HttpError } from "@/utils/HttpError";
 import { withRetryOnDeadlock } from "@/utils/dbErrors";
 import { todos, type UpdateTodo, type NewTodo, type Todo } from "@/modules/todos/schema/todo.schema";
 import { hasPermission, type Permission } from "@/modules/authorization/permissions";
-import { TodoListService } from "@/modules/todo-lists/TodoListService";
+import { TodoListService, type DbTransaction } from "@/modules/todo-lists/TodoListService";
+import { lockList, lockUsers } from "@/modules/todo-lists/locks";
+import { MAX_TODOS_PER_LIST } from "@/modules/todo-lists/limits";
 import { hasListRole } from "@/modules/todo-lists/listRoles";
-import { todoListMembers, todoLists, type ListRole } from "@/modules/todo-lists/schema/todo-list.schema";
+import { todoListMembers, todoLists, type ListRole, type TodoList } from "@/modules/todo-lists/schema/todo-list.schema";
 
 /** the user who wants to access a todo, as the access token describes it (req.user) */
 export interface AccessingUser {
@@ -68,20 +70,24 @@ export class TodoService extends BaseModule {
     return this.isCreatorOrAdmin(todo, user);
   }
 
-  /** Changing a todo: in a list at least editor, otherwise its creator. */
-  async canEditTodo(todo: Pick<Todo, "userId" | "listId">, user: AccessingUser): Promise<boolean> {
-    if (todo.listId) return hasListRole(await this.getRoleInListOf(todo.listId, user), "editor");
+  /**
+   * Changing a todo: in a list at least editor, otherwise its creator.
+   * @param tx read within this transaction, e.g. under the lock of the list
+   */
+  async canEditTodo(todo: Pick<Todo, "userId" | "listId">, user: AccessingUser, tx?: DbTransaction): Promise<boolean> {
+    if (todo.listId) return hasListRole(await this.getRoleInListOf(todo.listId, user, tx), "editor");
     return this.isCreatorOrAdmin(todo, user);
   }
 
   /**
    * Deleting a todo, and taking it out of its list: in a list the owner, or an editor who created it; otherwise its
    * creator.
+   * @param tx read within this transaction, e.g. under the lock of the list
    */
-  async canDeleteTodo(todo: Pick<Todo, "userId" | "listId">, user: AccessingUser): Promise<boolean> {
+  async canDeleteTodo(todo: Pick<Todo, "userId" | "listId">, user: AccessingUser, tx?: DbTransaction): Promise<boolean> {
     if (!todo.listId) return this.isCreatorOrAdmin(todo, user);
 
-    const role = await this.getRoleInListOf(todo.listId, user);
+    const role = await this.getRoleInListOf(todo.listId, user, tx);
     return role === "owner" || (role === "editor" && todo.userId === user.id);
   }
 
@@ -89,28 +95,94 @@ export class TodoService extends BaseModule {
     return hasPermission(user.permissions, "admin:all") || (todo.userId !== null && todo.userId === user.id);
   }
 
-  private async getRoleInListOf(listId: string, user: AccessingUser): Promise<ListRole | undefined> {
-    const list = await this.todoListService.getListById(listId);
-    return list ? this.todoListService.getListRole(list, user) : undefined;
+  private async getRoleInListOf(listId: string, user: AccessingUser, tx?: DbTransaction): Promise<ListRole | undefined> {
+    const list = tx
+      ? (await tx.select().from(todoLists).where(eq(todoLists.listId, listId)))[0]
+      : await this.todoListService.getListById(listId);
+    return list ? this.todoListService.getListRole(list, user, tx) : undefined;
   }
 
-  async createTodo(data: NewTodo): Promise<Todo> {
-    const [todo] = await db.insert(todos).values(data).returning();
+  /**
+   * Creates a todo. Into a list only as editor or owner and while the list is not full, both checked under the lock of
+   * the list, so a role removed or a list filled meanwhile is respected (design 7.2).
+   * @throws HttpError 404 unknown list, 403 below editor, 409 full list
+   */
+  async createTodo(data: NewTodo, user: AccessingUser): Promise<Todo> {
+    const { listId } = data;
+    if (!listId) {
+      const [todo] = await db.insert(todos).values(data).returning();
+      return todo;
+    }
 
-    return todo;
+    return withRetryOnDeadlock(() =>
+      db.transaction(async (tx) => {
+        // the new todo references its creator: lock the user row before the list (lock order of locks.ts)
+        await lockUsers(tx, [user.id]);
+        const list = await lockList(tx, listId);
+        await this.ensureCanAddUnderLock(tx, list, user);
+
+        const [todo] = await tx.insert(todos).values(data).returning();
+        return todo;
+      }),
+    );
+  }
+
+  /** @throws HttpError 403 below editor, 409 when the list is full */
+  private async ensureCanAddUnderLock(tx: DbTransaction, list: TodoList, user: AccessingUser): Promise<void> {
+    if (!hasListRole(await this.todoListService.getListRole(list, user, tx), "editor")) {
+      throw HttpError.forbidden("List role editor required to add a todo");
+    }
+    const [{ value }] = await tx.select({ value: count() }).from(todos).where(eq(todos.listId, list.listId));
+    if (value >= MAX_TODOS_PER_LIST) throw HttpError.conflict("List is full");
   }
 
   /**
    * Updates a todo under a lock of its row, so a concurrent deletion of its creator or its list cannot interleave:
    * a todo whose creator was deleted cannot leave its list (it would belong to nobody, chk_todos_owner_or_list).
+   *
+   * Moving it into another list (or out of its list) locks both lists first (lock order: lists by id, then the todo)
+   * and checks the rights again under these locks: a role removed meanwhile must not still let it through (design 7.2).
+   * Every update fails when the todo is not in the list the access check saw anymore, and a plain change checks the
+   * right to edit again.
+   * @param user who changes the todo
+   * @param expectedListId the list of the todo as the access check saw it
    * @returns undefined when the todo does not exist (anymore)
-   * @throws HttpError 409 when a todo without creator should leave its list
+   * @throws HttpError 404 unknown target list, 403 missing rights, 409 todo moved meanwhile, full target, or a todo
+   *   without creator that should leave its list
    */
-  async updateTodo(todoId: string, updateData: UpdateTodo): Promise<Todo | undefined> {
+  async updateTodo(
+    todoId: string,
+    updateData: UpdateTodo,
+    user: AccessingUser,
+    expectedListId: string | null,
+  ): Promise<Todo | undefined> {
+    const targetListId = updateData.listId;
+    const moves = targetListId !== undefined && targetListId !== expectedListId;
+
     return withRetryOnDeadlock(() =>
       db.transaction(async (tx) => {
-        const [current] = await tx.select({ userId: todos.userId }).from(todos).where(eq(todos.todoId, todoId)).for("update");
+        const lockedLists = moves ? await this.lockListsOfMove(tx, expectedListId, targetListId) : new Map<string, TodoList>();
+
+        const [current] = await tx
+          .select({ userId: todos.userId, listId: todos.listId })
+          .from(todos)
+          .where(eq(todos.todoId, todoId))
+          .for("update");
         if (!current) return undefined;
+
+        // the access check saw another list: its rights do not hold anymore, and writing the old listId back would
+        // move the todo without any check
+        if (current.listId !== expectedListId) throw HttpError.conflict("The list changed meanwhile, please try again");
+        if (!moves && !(await this.canEditTodo(current, user, tx))) {
+          throw HttpError.forbidden("Changing a todo of a list needs at least the role editor");
+        }
+
+        if (moves) {
+          if (!(await this.canDeleteTodo(current, user, tx))) {
+            throw HttpError.forbidden("Moving needs the right to take the todo out of its list");
+          }
+          if (targetListId) await this.ensureCanAddUnderLock(tx, lockedLists.get(targetListId)!, user);
+        }
 
         if (updateData.listId === null && current.userId === null) {
           throw HttpError.conflict("A todo of a deleted user cannot leave its list");
@@ -124,6 +196,25 @@ export class TodoService extends BaseModule {
         return todo;
       }),
     );
+  }
+
+  /**
+   * Locks the source and the target list of a move, ordered by id. A source list deleted meanwhile is no error here:
+   * the todo then lost its list, which the caller answers with 409.
+   * @throws HttpError 404 when the target list does not exist
+   */
+  private async lockListsOfMove(
+    tx: DbTransaction,
+    sourceListId: string | null,
+    targetListId: string | null | undefined,
+  ): Promise<Map<string, TodoList>> {
+    const ids = [...new Set([sourceListId, targetListId].filter((id): id is string => !!id))].sort();
+    const rows = ids.length
+      ? await tx.select().from(todoLists).where(inArray(todoLists.listId, ids)).orderBy(asc(todoLists.listId)).for("update")
+      : [];
+    const locked = new Map(rows.map((list) => [list.listId, list]));
+    if (targetListId && !locked.has(targetListId)) throw HttpError.notFound("List not found");
+    return locked;
   }
 
   /** @returns undefined when the todo does not exist (anymore) */

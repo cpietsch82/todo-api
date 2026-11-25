@@ -226,6 +226,24 @@ describe("TodoListAPI", () => {
       expect(response.status).toBe(404);
     });
 
+    it("should answer 409 to PATCH and DELETE when the list was handed over meanwhile", async () => {
+      const list = await createList(owner.userId);
+      await addMember(list.listId, member.userId, "editor");
+      // the role check saw the old owner, meanwhile the list went to the member
+      vi.spyOn(TodoListService.prototype, "getListById").mockResolvedValue({ ...list });
+      await db.update(todoLists).set({ ownerId: member.userId }).where(eq(todoLists.listId, list.listId));
+      const header = await createAuthHeader(owner);
+
+      const patched = await request(server).patch(`/api/todo-lists/${list.listId}`).set(header).send({ updates: { name: "X" } });
+      const deleted = await request(server).delete(`/api/todo-lists/${list.listId}`).set(header);
+
+      for (const response of [patched, deleted]) {
+        expect(response.status).toBe(409);
+        expect(response.text).toBe("The list changed meanwhile, please try again");
+      }
+      expect(await listById(list.listId)).toMatchObject({ name: list.name, ownerId: member.userId });
+    });
+
     it("should answer 404 when the list vanished before PATCH or DELETE", async () => {
       const list = await createList(owner.userId);
       const header = await createAuthHeader(owner);

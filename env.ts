@@ -65,6 +65,9 @@ export const envSchema = z.object({
   TOKEN_RATE_LIMIT_WINDOW_MS: z.coerce.number().positive().default(15 * 60 * 1000),
   REGISTER_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(5),
   REGISTER_RATE_LIMIT_WINDOW_MS: z.coerce.number().positive().default(60 * 60 * 1000),
+  // invitations to todo lists per user (unknown usernames included, so usernames cannot be probed quickly)
+  INVITATION_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(20),
+  INVITATION_RATE_LIMIT_WINDOW_MS: z.coerce.number().positive().default(60 * 60 * 1000),
   // ---- updater (only used by the updater container, see src/modules/updater) ----
   // absolute path of the folder with docker-compose.yml and deploy.env, mounted at the same path as on the host
   UPDATER_PROJECT_DIR: z.string().startsWith("/", "must be an absolute path").optional(),

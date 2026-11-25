@@ -12,6 +12,7 @@ export default defineConfig({
       REGISTER_RATE_LIMIT_MAX: "1000",
       TOKEN_RATE_LIMIT_MAX: "1000",
       DOCKER_OPERATION_RATE_LIMIT_MAX: "1000",
+      INVITATION_RATE_LIMIT_MAX: "1000",
       // the tests check that error details stay hidden, a local .env that enables them must not change that
       EXPOSE_ERROR_DETAILS: "false",
     },

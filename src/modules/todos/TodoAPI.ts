@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { APIModule } from "@modules/core/APIModule";
 import { TodoService } from "./TodoService";
+import { TodoCommentService } from "./TodoCommentService";
 import {
   CreateTodoBody,
   createTodoSchema,
@@ -28,11 +29,13 @@ import type { AccessingUser } from "./TodoService";
 export class TodoAPI extends APIModule {
   private static instance: TodoAPI;
   private todoService: TodoService;
+  private todoCommentService: TodoCommentService;
 
   constructor() {
     super("todo.api", "API Module for Todo CRUD operations", "/todos");
 
     this.todoService = new TodoService();
+    this.todoCommentService = new TodoCommentService();
 
     if (!TodoAPI.instance) {
       TodoAPI.instance = this;
@@ -51,6 +54,14 @@ export class TodoAPI extends APIModule {
       requirePermissions("todos:read"),
       requireAccess,
       typedHandler(this.getTodoById.bind(this)),
+    );
+    // the discussion of a todo: every user who may see the todo reads all its comments
+    this.router.get(
+      "/:todoId/comments",
+      validateParams(todoByIdSchema),
+      requirePermissions("todo-comments:read"),
+      requireAccess,
+      typedHandler(this.getCommentsOfTodo.bind(this)),
     );
     this.router.post("/", requirePermissions("todos:create"), validateBody(createTodoSchema), typedHandler(this.createTodo.bind(this)));
     this.router.patch(
@@ -87,6 +98,10 @@ export class TodoAPI extends APIModule {
     res.json(req.todo!);
   }
 
+  private async getCommentsOfTodo(req: TypedRequestParams<TodoByIdParams>, res: Response) {
+    res.json(await this.todoCommentService.getCommentsForTodo(req.params.todoId));
+  }
+
   /**
    * Creates a todo record and set some default values. Also sets the id of the
    * requested user as the userId for the record.
@@ -100,7 +115,8 @@ export class TodoAPI extends APIModule {
       userId: req.user?.id, // TODO: überlegen, ob hier dann eine RequestingEntity sinnvoll wäre!
     };
 
-    const todo = await this.todoService.createTodo(newTodo as Todo);
+    // the list rights are checked once more under the lock of the list
+    const todo = await this.todoService.createTodo(newTodo as Todo, req.user!);
     res.status(201).json(todo);
   }
 
@@ -114,7 +130,8 @@ export class TodoAPI extends APIModule {
       await this.ensureCanMove(todo, updates.listId, req.user!);
     }
 
-    const updatedTodo = await this.todoService.updateTodo(todoId, updates);
+    // a move is checked once more under the locks of both lists
+    const updatedTodo = await this.todoService.updateTodo(todoId, updates, req.user!, todo.listId);
     // deleted after the access check
     if (!updatedTodo) return res.respondNotFound();
     res.status(201).json(updatedTodo);
