@@ -74,7 +74,8 @@ export const createTodoSchema = z.object({
     updatedAt: true,
     version: true,
   }).extend({
-    listId: z.uuid("Invalid ListId").optional(),
+    // null or missing: the todo belongs to no list
+    listId: z.uuid("Invalid ListId").nullable().optional(),
   }),
 });
 

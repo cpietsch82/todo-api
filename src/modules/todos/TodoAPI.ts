@@ -134,7 +134,9 @@ export class TodoAPI extends APIModule {
     const list = await todoListService.getListById(listId);
     if (!list) throw HttpError.notFound("List not found");
 
-    if (!hasListRole(await todoListService.getListRole(list, user), "editor")) throw HttpError.forbidden();
+    if (!hasListRole(await todoListService.getListRole(list, user), "editor")) {
+      throw HttpError.forbidden("List role editor required to add a todo");
+    }
     if ((await todoListService.countTodosInList(listId)) >= MAX_TODOS_PER_LIST) throw HttpError.conflict("List is full");
   }
 
@@ -144,7 +146,9 @@ export class TodoAPI extends APIModule {
    * @param targetListId null to take the todo out of its list
    */
   private async ensureCanMove(todo: Todo, targetListId: string | null, user: AccessingUser): Promise<void> {
-    if (!(await this.todoService.canDeleteTodo(todo, user))) throw HttpError.forbidden();
+    if (!(await this.todoService.canDeleteTodo(todo, user))) {
+      throw HttpError.forbidden("Moving needs the right to take the todo out of its list");
+    }
 
     // taking it out of its list needs nothing more; whether it still has a creator is checked under the lock of the
     // update (TodoService.updateTodo)

@@ -12,6 +12,7 @@ import { TodoCommentAPI } from "@modules/todos/TodoCommentAPI";
 import { todoComments } from "@modules/todos/schema/todo.comment.schema";
 import { createAuthHeader, generateTodo, generateUser, NON_EXISTENT_UUID } from "@tests/test.helpers";
 import { getTestServer } from "@tests/integration.setup";
+import { logger } from "@/utils/logger";
 
 /** a todo record that passes the create schema */
 const TODO = { title: "Milch kaufen", description: "", status: "not_ready", tags: [] };
@@ -49,6 +50,10 @@ describe("TodoAPI with lists", () => {
     list = await createList(owner.userId);
     await addMember(list.listId, editor.userId, "editor");
     await addMember(list.listId, viewer.userId, "viewer");
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   const create = async (user: User, todoRecord: object) =>
@@ -108,6 +113,26 @@ describe("TodoAPI with lists", () => {
       expect(response.text).toBe("List is full");
     });
 
+    it("should create a todo without list for listId null", async () => {
+      const response = await create(owner, { ...TODO, listId: null, userId: stranger.userId });
+
+      expect(response.status).toBe(201);
+      expect(response.body).toMatchObject({ listId: null, userId: owner.userId });
+    });
+
+    it("should log why adding to a list was denied, but tell the client nothing", async () => {
+      const warn = vi.spyOn(logger, "warn");
+
+      const response = await create(viewer, { ...TODO, listId: list.listId });
+
+      expect(response.status).toBe(403);
+      expect(response.text).toBe("Insufficient Permissions!");
+      expect(warn).toHaveBeenCalledWith(
+        expect.objectContaining({ reason: "List role editor required to add a todo" }),
+        "Access denied",
+      );
+    });
+
     it("should ignore a version and a creator in the body", async () => {
       const response = await create(owner, { ...TODO, version: 9, userId: stranger.userId });
 
@@ -117,10 +142,6 @@ describe("TodoAPI with lists", () => {
   });
 
   describe("concurrent changes between the access check and the update", () => {
-    afterEach(() => {
-      vi.restoreAllMocks();
-    });
-
     it("should refuse to take a todo out of its list when its creator was deleted meanwhile", async () => {
       const creator = await generateUser();
       await addMember(list.listId, creator.userId, "editor");
@@ -214,6 +235,19 @@ describe("TodoAPI with lists", () => {
 
       expect(response.status).toBe(201);
       expect(await todoById(todo.todoId)).toMatchObject({ listId: null, userId: editor.userId });
+    });
+
+    it("should log why a move was denied", async () => {
+      const todo = await generateTodo(owner.userId, { listId: list.listId });
+      const warn = vi.spyOn(logger, "warn");
+
+      const response = await patch(editor, todo.todoId, { listId: null });
+
+      expect(response.text).toBe("Insufficient Permissions!");
+      expect(warn).toHaveBeenCalledWith(
+        expect.objectContaining({ reason: "Moving needs the right to take the todo out of its list" }),
+        "Access denied",
+      );
     });
 
     it("should not let an editor take the todo of someone else out of the list", async () => {
