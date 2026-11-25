@@ -1,11 +1,12 @@
 import { db } from "@/db";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, count, eq } from "drizzle-orm";
 import { BaseModule } from "@modules/core/BaseModule";
 import { users } from "@/modules/users/schema/user.schema";
 import { HttpError } from "@/utils/HttpError";
 import { withRetryOnDeadlock } from "@/utils/dbErrors";
-import { lockList } from "./locks";
-import { todoListMembers, type ListRole, type MemberRole, type TodoList } from "./schema/todo-list.schema";
+import { lockList, lockUsers } from "./locks";
+import { MAX_LISTS_PER_USER } from "./limits";
+import { todoListMembers, todoLists, type ListRole, type MemberRole, type TodoList } from "./schema/todo-list.schema";
 import type { DbTransaction } from "./TodoListService";
 
 /** a user of a list as the other users of the list see it: no e-mail, no names */
@@ -87,6 +88,43 @@ export class TodoListMemberService extends BaseModule {
         if (!removed) throw HttpError.notFound("Member not found");
 
         return { ...(await this.getMemberIdentity(tx, userId)), role: removed.role };
+      }),
+    );
+  }
+
+  /**
+   * Hands a list over to one of its members (design 8). The old owner stays in the list as editor.
+   * @param actorId who hands it over: the owner, or an admin
+   * @param expectedOwnerId the owner the role check of the request saw
+   * @throws HttpError 404 for a list that is gone, 409 when the target is no member, owns too many lists already, or
+   *   the list was handed over meanwhile
+   */
+  async transferList(listId: string, newOwnerId: string, actorId: string, expectedOwnerId: string): Promise<TodoList> {
+    return withRetryOnDeadlock(() =>
+      db.transaction(async (tx) => {
+        // the old owner becomes a member and the actor is noted as the one who added it: lock both users and the new
+        // owner against their deletion before the list (lock order of locks.ts)
+        await lockUsers(tx, [expectedOwnerId, newOwnerId, actorId]);
+        await lockList(tx, listId, expectedOwnerId);
+
+        const [target] = await tx
+          .select({ userId: todoListMembers.userId })
+          .from(todoListMembers)
+          .where(and(eq(todoListMembers.listId, listId), eq(todoListMembers.userId, newOwnerId)))
+          .for("update");
+        if (!target) throw HttpError.conflict("The new owner must be a member of the list");
+
+        const [{ value: ownedLists }] = await tx.select({ value: count() }).from(todoLists).where(eq(todoLists.ownerId, newOwnerId));
+        if (ownedLists >= MAX_LISTS_PER_USER) throw HttpError.conflict("List limit reached");
+
+        await tx.delete(todoListMembers).where(and(eq(todoListMembers.listId, listId), eq(todoListMembers.userId, newOwnerId)));
+        const [list] = await tx
+          .update(todoLists)
+          .set({ ownerId: newOwnerId, updatedAt: new Date() })
+          .where(eq(todoLists.listId, listId))
+          .returning();
+        await tx.insert(todoListMembers).values({ listId, userId: expectedOwnerId, role: "editor", addedBy: actorId });
+        return list;
       }),
     );
   }

@@ -14,5 +14,10 @@ export const changeMemberRoleSchema = z.object({
   role: memberRoleSchema,
 });
 
+export const transferListSchema = z.object({
+  userId: z.uuid("Invalid UserId"),
+});
+
 export type ListMemberParams = z.infer<typeof listMemberParamsSchema>;
 export type ChangeMemberRoleBody = z.infer<typeof changeMemberRoleSchema>;
+export type TransferListBody = z.infer<typeof transferListSchema>;

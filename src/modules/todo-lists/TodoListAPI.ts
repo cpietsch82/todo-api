@@ -19,8 +19,10 @@ import {
 import {
   changeMemberRoleSchema,
   listMemberParamsSchema,
+  transferListSchema,
   type ChangeMemberRoleBody,
   type ListMemberParams,
+  type TransferListBody,
 } from "./schema/sharing.schema";
 
 /**
@@ -91,6 +93,14 @@ export class TodoListAPI extends APIModule {
     );
     // leaving needs no permission beyond being in the list, removing others is checked in the handler
     this.router.delete("/:listId/members/:userId", byMember, requireListRole("viewer"), typedHandler(this.removeMember.bind(this)));
+    this.router.post(
+      "/:listId/transfer",
+      byId,
+      requirePermissions("todo-lists:share"),
+      requireListRole("owner"),
+      validateBody(transferListSchema),
+      typedHandler(this.transferList.bind(this)),
+    );
   }
 
   private async getLists(req: Request, res: Response) {
@@ -144,6 +154,19 @@ export class TodoListAPI extends APIModule {
   private async changeMemberRole(req: TypedRequest<ListMemberParams, ChangeMemberRoleBody>, res: Response) {
     const list = req.todoList!;
     res.json(await this.memberService.changeRole(list.listId, req.params.userId, req.body.role, list.ownerId));
+  }
+
+  /** Hands the list over to a member; answers with the list as the requesting user sees it now. */
+  private async transferList(req: TypedRequestBody<TransferListBody>, res: Response) {
+    const user = req.user!;
+    const { listId, ownerId } = req.todoList!;
+    const list = await this.memberService.transferList(listId, req.body.userId, user.id, ownerId);
+
+    const myRole = await this.todoListService.getListRole(list, user);
+    const summary = myRole ? await this.todoListService.getListSummary(list, myRole) : undefined;
+    // deleted right after the transfer
+    if (!summary) throw HttpError.notFound();
+    res.json(summary);
   }
 
   /** A member leaves the list, or the owner removes someone else. */
