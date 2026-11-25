@@ -4,6 +4,20 @@ import AuthorizationService from "@/modules/authorization/AuthorizationService";
 import { TodoCommentService } from "@/modules/todos/TodoCommentService";
 import { TodoService } from "@/modules/todos/TodoService";
 import UserService from "@/modules/users/UserService";
+import { TodoListService } from "@/modules/todo-lists/TodoListService";
+import { hasListRole } from "@/modules/todo-lists/listRoles";
+import type { ListRole, TodoList } from "@/modules/todo-lists/schema/todo-list.schema";
+
+declare global {
+  namespace Express {
+    interface Request {
+      /** set by requireListRole: the list of the route */
+      todoList?: TodoList;
+      /** set by requireListRole: the role of the current user in that list */
+      listRole?: ListRole;
+    }
+  }
+}
 
 /**
  * Returns the currently authenticated user or sends a 401 response when no
@@ -219,4 +233,39 @@ export function requireUserOwnership(userService: UserService = new UserService(
     },
     "You are not allowed to access this user",
   );
+}
+
+/**
+ * Requires at least the given role in the list of the route (owner > editor > viewer, admins count as owner). The
+ * role is read from the database on every request, so a removed member loses the access with the next request.
+ * 404 when the list does not exist, 403 when the role is too low. Passes the list and the role on as req.todoList and
+ * req.listRole, so the handler does not need to load them again.
+ * @param resolveListId where the list id is, by default the route parameter listId; must run after the validation
+ */
+export function requireListRole(
+  minimum: ListRole,
+  resolveListId: (req: Request) => string | undefined = (req) => req.params.listId as string | undefined,
+  todoListService: TodoListService = new TodoListService(),
+): RequestHandler {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    const user = getAuthenticatedUser(req, res);
+    if (!user) return;
+
+    const listId = resolveListId(req);
+    const list = listId ? await todoListService.getListById(listId) : undefined;
+    if (!list) {
+      res.respondNotFound();
+      return;
+    }
+
+    const role = await todoListService.getListRole(list, user);
+    if (!hasListRole(role, minimum)) {
+      res.respondAuthorizationInsufficient(`List role ${minimum} required`, true);
+      return;
+    }
+
+    req.todoList = list;
+    req.listRole = role;
+    next();
+  };
 }
