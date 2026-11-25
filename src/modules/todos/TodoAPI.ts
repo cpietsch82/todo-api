@@ -11,9 +11,19 @@ import {
   updateTodoSchema,
 } from "./schema/todo.schema";
 import { validateBody, validateParams } from "@/middleware/validate";
-import { requirePermissions, requireTodoAccess, requireTodoOwnership } from "@/middleware/permissions";
+import {
+  requirePermissions,
+  requireTodoAccess,
+  requireTodoDeleteAccess,
+  requireTodoEditAccess,
+} from "@/middleware/permissions";
 import { TypedRequest, TypedRequestBody, TypedRequestParams } from "../express/Express";
 import { typedHandler } from "@/utils/typedHandler";
+import { HttpError } from "@/utils/HttpError";
+import { TodoListService } from "@/modules/todo-lists/TodoListService";
+import { hasListRole } from "@/modules/todo-lists/listRoles";
+import { MAX_TODOS_PER_LIST } from "@/modules/todo-lists/limits";
+import type { AccessingUser } from "./TodoService";
 
 export class TodoAPI extends APIModule {
   private static instance: TodoAPI;
@@ -31,8 +41,7 @@ export class TodoAPI extends APIModule {
   }
 
   protected initializeRoutes(): void {
-    // reading needs access to the todo (TodoService.canAccessTodo), changing and deleting stays with its creator
-    const requireTodoOwner = requireTodoOwnership(new TodoService());
+    // who may read, change and delete a todo follows from TodoService (the list of the todo, or its creator)
     const requireAccess = requireTodoAccess();
 
     this.router.get("/", requirePermissions("todos:read"), this.getAllTodos.bind(this));
@@ -48,7 +57,7 @@ export class TodoAPI extends APIModule {
       "/:todoId",
       validateParams(todoByIdSchema),
       requirePermissions("todos:update"),
-      requireTodoOwner,
+      requireTodoEditAccess(),
       validateBody(updateTodoSchema),
       typedHandler(this.updateTodo.bind(this)),
     );
@@ -56,7 +65,7 @@ export class TodoAPI extends APIModule {
       "/:todoId",
       validateParams(todoByIdSchema),
       requirePermissions("todos:delete"),
-      requireTodoOwner,
+      requireTodoDeleteAccess(),
       typedHandler(this.deleteTodo.bind(this)),
     );
     // weitere API Endpoints
@@ -66,7 +75,7 @@ export class TodoAPI extends APIModule {
   }
 
   private async getAllTodos(req: Request, res: Response) {
-    const todos = await this.todoService.getAllTodos(req.user?.id);
+    const todos = await this.todoService.getAllTodos(req.user!.id);
     res.json(todos);
   }
 
@@ -87,6 +96,7 @@ export class TodoAPI extends APIModule {
    */
   private async createTodo(req: TypedRequestBody<CreateTodoBody>, res: Response) {
     const { todoRecord } = req.body;
+    if (todoRecord.listId) await this.ensureCanAddToList(todoRecord.listId, req.user!);
 
     const newTodo = {
       ...todoRecord,
@@ -105,8 +115,41 @@ export class TodoAPI extends APIModule {
     const todo = await this.todoService.getTodoById(todoId);
     if (!todo) return res.respondNotFound();
 
+    if (updates.listId !== undefined && updates.listId !== todo.listId) {
+      await this.ensureCanMove(todo, updates.listId, req.user!);
+    }
+
     const updatedTodo = await this.todoService.updateTodo(todoId, updates);
     res.status(201).json(updatedTodo);
+  }
+
+  /**
+   * A todo may be put into a list by an editor or the owner of the list, as long as the list is not full.
+   * @throws HttpError 404 for an unknown list, 403 below editor, 409 for a full list
+   */
+  private async ensureCanAddToList(listId: string, user: AccessingUser): Promise<void> {
+    const todoListService = new TodoListService();
+    const list = await todoListService.getListById(listId);
+    if (!list) throw HttpError.notFound("List not found");
+
+    if (!hasListRole(await todoListService.getListRole(list, user), "editor")) throw HttpError.forbidden();
+    if ((await todoListService.countTodosInList(listId)) >= MAX_TODOS_PER_LIST) throw HttpError.conflict("List is full");
+  }
+
+  /**
+   * Moving a todo needs the right to take it out of its current list (the same as deleting it there) and the right to
+   * add it to the target list. Without a list it goes back to its creator, a todo whose creator was deleted would then
+   * belong to nobody and stays.
+   * @param targetListId null to take the todo out of its list
+   */
+  private async ensureCanMove(todo: Todo, targetListId: string | null, user: AccessingUser): Promise<void> {
+    if (!(await this.todoService.canDeleteTodo(todo, user))) throw HttpError.forbidden();
+
+    if (targetListId === null) {
+      if (todo.userId === null) throw HttpError.conflict("A todo of a deleted user cannot leave its list");
+      return;
+    }
+    await this.ensureCanAddToList(targetListId, user);
   }
 
   private async deleteTodo(req: TypedRequestParams<TodoByIdParams>, res: Response) {

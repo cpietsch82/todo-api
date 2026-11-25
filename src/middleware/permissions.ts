@@ -2,7 +2,8 @@ import type { NextFunction, Request, RequestHandler, Response } from "express";
 import { hasAnyPermission, hasEveryPermission, hasPermission, type Permission } from "@/modules/authorization/permissions";
 import AuthorizationService from "@/modules/authorization/AuthorizationService";
 import { TodoCommentService } from "@/modules/todos/TodoCommentService";
-import { TodoService } from "@/modules/todos/TodoService";
+import { TodoService, type AccessingUser } from "@/modules/todos/TodoService";
+import type { Todo } from "@/modules/todos/schema/todo.schema";
 import UserService from "@/modules/users/UserService";
 import { TodoListService } from "@/modules/todo-lists/TodoListService";
 import { hasListRole } from "@/modules/todo-lists/listRoles";
@@ -162,30 +163,16 @@ function createOwnershipMiddleware(
   };
 }
 
-/**
- * Requires ownership of the referenced todo or admin privileges.
- */
-export function requireTodoOwnership(todoService: TodoService = new TodoService()): RequestHandler {
-  return createOwnershipMiddleware(
-    async (req) => {
-      const todo = await todoService.getTodoById(req.params.todoId as string);
-      // a todo whose creator was deleted has no owner left (replaced by the list based check in the next step)
-      return todo?.userId ?? undefined;
-    },
-    "You are not allowed to access this todo",
-  );
-}
+type TodoAccessCheck = (todoService: TodoService, todo: Todo, user: AccessingUser) => Promise<boolean>;
 
 /**
- * Requires access to a todo: the user may see it (TodoService.canAccessTodo). Unlike the ownership checks this is
- * not limited to the creator once todos can be shared, so it guards everything that only needs to see the todo
- * (reading it, taking part in its discussion).
- * 404 when the todo does not exist (also for admins), 403 when the user may not see it.
- * @param resolveTodoId where the todo id is, by default the route parameter todoId; must run after the validation
+ * Loads the todo of the request and checks the access with one of the rules of the TodoService.
+ * 404 when the todo does not exist (also for admins), 403 when the rule does not allow the access.
  */
-export function requireTodoAccess(
-  resolveTodoId: (req: Request) => string | undefined = (req) => req.params.todoId as string | undefined,
-  todoService: TodoService = new TodoService(),
+function createTodoAccessCheck(
+  isAllowed: TodoAccessCheck,
+  resolveTodoId: (req: Request) => string | undefined,
+  todoService: TodoService,
 ): RequestHandler {
   return async (req: Request, res: Response, next: NextFunction) => {
     const user = getAuthenticatedUser(req, res);
@@ -198,13 +185,38 @@ export function requireTodoAccess(
       return;
     }
 
-    if (!(await todoService.canAccessTodo(todo, user))) {
+    if (!(await isAllowed(todoService, todo, user))) {
       res.respondAuthorizationInsufficient("You are not allowed to access this todo", true);
       return;
     }
 
     next();
   };
+}
+
+const todoIdFromParams = (req: Request) => req.params.todoId as string | undefined;
+
+/**
+ * Requires access to a todo: the user may see it (TodoService.canAccessTodo), as creator of a todo without list or
+ * with any role in the list of the todo. Guards everything that only needs to see the todo (reading it, taking part
+ * in its discussion).
+ * @param resolveTodoId where the todo id is, by default the route parameter todoId; must run after the validation
+ */
+export function requireTodoAccess(
+  resolveTodoId: (req: Request) => string | undefined = todoIdFromParams,
+  todoService: TodoService = new TodoService(),
+): RequestHandler {
+  return createTodoAccessCheck((service, todo, user) => service.canAccessTodo(todo, user), resolveTodoId, todoService);
+}
+
+/** Requires the right to change the todo of the route (TodoService.canEditTodo). */
+export function requireTodoEditAccess(todoService: TodoService = new TodoService()): RequestHandler {
+  return createTodoAccessCheck((service, todo, user) => service.canEditTodo(todo, user), todoIdFromParams, todoService);
+}
+
+/** Requires the right to delete the todo of the route (TodoService.canDeleteTodo). */
+export function requireTodoDeleteAccess(todoService: TodoService = new TodoService()): RequestHandler {
+  return createTodoAccessCheck((service, todo, user) => service.canDeleteTodo(todo, user), todoIdFromParams, todoService);
 }
 
 /**
