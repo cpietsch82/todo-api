@@ -456,6 +456,31 @@ describe("TodoAPI with lists", () => {
       expect((await todoById(todo.todoId)).listId).toBe(second.listId);
     });
 
+    it("should refuse an update when the todo was moved meanwhile, even with its old listId in the body", async () => {
+      const second = await createList(owner.userId, "Baumarkt");
+      const todo = await generateTodo(owner.userId, { listId: list.listId });
+      // the editor saw the todo in the first list and sends the whole form back; meanwhile the owner moved it
+      vi.spyOn(TodoService.prototype, "getTodoById").mockResolvedValue({ ...todo });
+      await db.update(todos).set({ listId: second.listId }).where(eq(todos.todoId, todo.todoId));
+
+      const response = await patch(editor, todo.todoId, { listId: list.listId, title: "Hafermilch" });
+
+      expect(response.status).toBe(409);
+      expect(response.text).toBe("The list changed meanwhile, please try again");
+      expect(await todoById(todo.todoId)).toMatchObject({ listId: second.listId, title: todo.title });
+    });
+
+    it("should refuse a change when the editor lost the role meanwhile", async () => {
+      const todo = await generateTodo(owner.userId, { listId: list.listId });
+      await db.delete(todoListMembers).where(eq(todoListMembers.userId, editor.userId));
+      staleRoleBeforeTheLock("editor");
+
+      const response = await patch(editor, todo.todoId, { title: "Hafermilch" });
+
+      expect(response.status).toBe(403);
+      expect((await todoById(todo.todoId)).title).toBe(todo.title);
+    });
+
     it("should refuse adding to a list when the role was removed meanwhile", async () => {
       await db.delete(todoListMembers).where(eq(todoListMembers.userId, editor.userId));
       staleRoleBeforeTheLock("editor");

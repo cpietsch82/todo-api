@@ -151,25 +151,38 @@ export class TodoListInvitationService extends BaseModule {
     }));
   }
 
-  /** @returns undefined when the list has no such invitation */
-  async revokeInvitation(listId: string, invitationId: string): Promise<ListInvitation | undefined> {
-    const [revoked] = await db
-      .delete(todoListInvitations)
-      .where(and(eq(todoListInvitations.listId, listId), eq(todoListInvitations.invitationId, invitationId)))
-      .returning();
-    if (!revoked) return undefined;
+  /**
+   * @param expectedOwnerId the owner the role check of the request saw; checked again under the lock of the list
+   * @returns undefined when the list has no such invitation
+   * @throws HttpError 404 when the list is gone, 409 when it was handed over meanwhile
+   */
+  async revokeInvitation(listId: string, invitationId: string, expectedOwnerId: string): Promise<ListInvitation | undefined> {
+    return withRetryOnDeadlock(() =>
+      db.transaction(async (tx) => {
+        await lockList(tx, listId, expectedOwnerId);
 
-    const [invitee] = revoked.inviteeId
-      ? await db.select({ userId: users.userId, username: users.username }).from(users).where(eq(users.userId, revoked.inviteeId))
-      : [];
-    return {
-      invitationId: revoked.invitationId,
-      listId: revoked.listId,
-      invitee,
-      role: revoked.role,
-      createdAt: revoked.createdAt,
-      expiresAt: revoked.expiresAt,
-    };
+        const [revoked] = await tx
+          .delete(todoListInvitations)
+          .where(and(eq(todoListInvitations.listId, listId), eq(todoListInvitations.invitationId, invitationId)))
+          .returning();
+        if (!revoked) return undefined;
+
+        const [invitee] = revoked.inviteeId
+          ? await tx
+              .select({ userId: users.userId, username: users.username })
+              .from(users)
+              .where(eq(users.userId, revoked.inviteeId))
+          : [];
+        return {
+          invitationId: revoked.invitationId,
+          listId: revoked.listId,
+          invitee,
+          role: revoked.role,
+          createdAt: revoked.createdAt,
+          expiresAt: revoked.expiresAt,
+        };
+      }),
+    );
   }
 
   async getInvitationById(invitationId: string): Promise<TodoListInvitation | undefined> {

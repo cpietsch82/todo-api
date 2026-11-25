@@ -161,7 +161,8 @@ export class TodoListAPI extends APIModule {
 
   private async updateList(req: TypedRequestBody<UpdateTodoListBody>, res: Response) {
     const { name, description } = req.body.updates;
-    const list = await this.todoListService.updateList(req.todoList!.listId, { name, description });
+    const { listId, ownerId } = req.todoList!;
+    const list = await this.todoListService.updateList(listId, { name, description }, ownerId);
     // deleted after requireListRole found it
     if (!list) throw HttpError.notFound();
     const summary = await this.todoListService.getListSummary(list, req.listRole!);
@@ -171,7 +172,8 @@ export class TodoListAPI extends APIModule {
   }
 
   private async deleteList(req: Request, res: Response) {
-    const list = await this.todoListService.deleteList(req.todoList!.listId);
+    const { listId, ownerId } = req.todoList!;
+    const list = await this.todoListService.deleteList(listId, undefined, ownerId);
     // deleted by someone else after requireListRole found it
     if (!list) throw HttpError.notFound();
     res.json(list);
@@ -202,7 +204,8 @@ export class TodoListAPI extends APIModule {
   }
 
   private async revokeInvitation(req: TypedRequest<ListInvitationParams>, res: Response) {
-    const invitation = await this.invitationService.revokeInvitation(req.todoList!.listId, req.params.invitationId);
+    const { listId, ownerId } = req.todoList!;
+    const invitation = await this.invitationService.revokeInvitation(listId, req.params.invitationId, ownerId);
     if (!invitation) throw HttpError.notFound("Invitation not found");
     res.json(invitation);
   }

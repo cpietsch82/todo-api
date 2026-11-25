@@ -248,6 +248,19 @@ describe("Invitations to a todo list (owner side)", () => {
       expect(await invitationsOf(other.listId)).toHaveLength(1);
     });
 
+    it("should answer 409 to a revocation when the list was handed over meanwhile", async () => {
+      const own = await insertInvitation(list.listId, max.userId, owner.userId);
+      vi.spyOn(TodoListService.prototype, "getListById").mockResolvedValue({ ...list, ownerId: stranger.userId });
+
+      const response = await request(server)
+        .delete(`/api/todo-lists/${list.listId}/invitations/${own.invitationId}`)
+        .set(await createAuthHeader(stranger));
+
+      expect(response.status).toBe(409);
+      expect(response.text).toBe("The list changed meanwhile, please try again");
+      expect(await invitationsOf(list.listId)).toHaveLength(1);
+    });
+
     it("should not let an editor revoke", async () => {
       const own = await insertInvitation(list.listId, max.userId, owner.userId);
 

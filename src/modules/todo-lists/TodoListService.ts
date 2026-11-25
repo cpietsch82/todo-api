@@ -5,6 +5,7 @@ import { hasPermission } from "@/modules/authorization/permissions";
 import { todos, type Todo } from "@/modules/todos/schema/todo.schema";
 import type { AccessingUser } from "@/modules/todos/TodoService";
 import { withRetryOnDeadlock } from "@/utils/dbErrors";
+import { HttpError } from "@/utils/HttpError";
 import { todoListMembers, todoLists, type ListRole, type TodoList } from "./schema/todo-list.schema";
 
 /** a running transaction of the database */
@@ -104,32 +105,67 @@ export class TodoListService extends BaseModule {
     return list;
   }
 
-  /** @returns undefined when the list does not exist (anymore) */
-  async updateList(listId: string, updates: { name?: string; description?: string | null }): Promise<TodoList | undefined> {
-    const [list] = await db
-      .update(todoLists)
-      .set({ ...updates, updatedAt: new Date() })
+  /**
+   * @param expectedOwnerId the owner the role check of the request saw; checked again under the lock of the list
+   * @returns undefined when the list does not exist (anymore)
+   * @throws HttpError 409 when the list was handed over meanwhile
+   */
+  async updateList(
+    listId: string,
+    updates: { name?: string; description?: string | null },
+    expectedOwnerId?: string,
+  ): Promise<TodoList | undefined> {
+    return withRetryOnDeadlock(() =>
+      db.transaction(async (tx) => {
+        if (!(await this.lockListOfOwner(tx, listId, expectedOwnerId))) return undefined;
+
+        const [list] = await tx
+          .update(todoLists)
+          .set({ ...updates, updatedAt: new Date() })
+          .where(eq(todoLists.listId, listId))
+          .returning();
+        return list;
+      }),
+    );
+  }
+
+  /**
+   * Locks the row of a list; unlike lockList a missing list is no error here.
+   * @returns false when the list does not exist
+   * @throws HttpError 409 when the list has another owner than expected
+   */
+  private async lockListOfOwner(tx: DbTransaction, listId: string, expectedOwnerId?: string): Promise<boolean> {
+    const [locked] = await tx
+      .select({ ownerId: todoLists.ownerId })
+      .from(todoLists)
       .where(eq(todoLists.listId, listId))
-      .returning();
-    return list;
+      .for("update");
+    if (!locked) return false;
+    if (expectedOwnerId !== undefined && locked.ownerId !== expectedOwnerId) {
+      throw HttpError.conflict("The list changed meanwhile, please try again");
+    }
+    return true;
   }
 
   /**
    * Deletes a list. Its todos go back to their creators (todos.list_id SET NULL), todos whose creator was deleted
    * would then belong to nobody and are deleted. Members and invitations go with the list.
    * @param tx the running transaction (e.g. the deletion of the owner), otherwise an own one is used
+   * @param expectedOwnerId the owner the role check of the request saw; checked again under the lock of the list
    * @returns undefined when the list does not exist
+   * @throws HttpError 409 when the list was handed over meanwhile
    */
-  async deleteList(listId: string, tx?: DbTransaction): Promise<TodoList | undefined> {
+  async deleteList(listId: string, tx?: DbTransaction, expectedOwnerId?: string): Promise<TodoList | undefined> {
     // an own transaction is retried after a deadlock; a given one belongs to the caller, who decides on retrying
-    if (!tx) return withRetryOnDeadlock(() => db.transaction((ownTx) => this.deleteList(listId, ownTx)));
+    if (!tx) {
+      return withRetryOnDeadlock(() => db.transaction((ownTx) => this.deleteList(listId, ownTx, expectedOwnerId)));
+    }
 
     // lock order of the spec (7.1): the list row first, then its todos ordered by id. A todo moved or added into the
     // list waits for the list row (its foreign key check) and fails cleanly once the list is gone; a concurrent
     // deletion of a creator waits for this transaction, or this one for it, and the statements below see its result
     // (READ COMMITTED reads again per statement)
-    const [locked] = await tx.select({ listId: todoLists.listId }).from(todoLists).where(eq(todoLists.listId, listId)).for("update");
-    if (!locked) return undefined;
+    if (!(await this.lockListOfOwner(tx, listId, expectedOwnerId))) return undefined;
     await tx.select({ todoId: todos.todoId }).from(todos).where(eq(todos.listId, listId)).orderBy(asc(todos.todoId)).for("update");
 
     await tx.delete(todos).where(and(eq(todos.listId, listId), isNull(todos.userId)));

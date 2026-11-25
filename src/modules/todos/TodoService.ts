@@ -142,6 +142,8 @@ export class TodoService extends BaseModule {
    *
    * Moving it into another list (or out of its list) locks both lists first (lock order: lists by id, then the todo)
    * and checks the rights again under these locks: a role removed meanwhile must not still let it through (design 7.2).
+   * Every update fails when the todo is not in the list the access check saw anymore, and a plain change checks the
+   * right to edit again.
    * @param user who changes the todo
    * @param expectedListId the list of the todo as the access check saw it
    * @returns undefined when the todo does not exist (anymore)
@@ -168,8 +170,14 @@ export class TodoService extends BaseModule {
           .for("update");
         if (!current) return undefined;
 
+        // the access check saw another list: its rights do not hold anymore, and writing the old listId back would
+        // move the todo without any check
+        if (current.listId !== expectedListId) throw HttpError.conflict("The list changed meanwhile, please try again");
+        if (!moves && !(await this.canEditTodo(current, user, tx))) {
+          throw HttpError.forbidden("Changing a todo of a list needs at least the role editor");
+        }
+
         if (moves) {
-          if (current.listId !== expectedListId) throw HttpError.conflict("The list changed meanwhile, please try again");
           if (!(await this.canDeleteTodo(current, user, tx))) {
             throw HttpError.forbidden("Moving needs the right to take the todo out of its list");
           }
