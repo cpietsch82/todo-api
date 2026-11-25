@@ -120,6 +120,8 @@ export class TodoAPI extends APIModule {
     }
 
     const updatedTodo = await this.todoService.updateTodo(todoId, updates);
+    // deleted after the access check
+    if (!updatedTodo) return res.respondNotFound();
     res.status(201).json(updatedTodo);
   }
 
@@ -138,17 +140,15 @@ export class TodoAPI extends APIModule {
 
   /**
    * Moving a todo needs the right to take it out of its current list (the same as deleting it there) and the right to
-   * add it to the target list. Without a list it goes back to its creator, a todo whose creator was deleted would then
-   * belong to nobody and stays.
+   * add it to the target list. Without a list it goes back to its creator.
    * @param targetListId null to take the todo out of its list
    */
   private async ensureCanMove(todo: Todo, targetListId: string | null, user: AccessingUser): Promise<void> {
     if (!(await this.todoService.canDeleteTodo(todo, user))) throw HttpError.forbidden();
 
-    if (targetListId === null) {
-      if (todo.userId === null) throw HttpError.conflict("A todo of a deleted user cannot leave its list");
-      return;
-    }
+    // taking it out of its list needs nothing more; whether it still has a creator is checked under the lock of the
+    // update (TodoService.updateTodo)
+    if (targetListId === null) return;
     await this.ensureCanAddToList(targetListId, user);
   }
 

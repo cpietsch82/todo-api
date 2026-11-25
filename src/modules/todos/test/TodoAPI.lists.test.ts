@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
 import request from "supertest";
 import type { Server } from "node:http";
 import { eq } from "drizzle-orm";
@@ -7,6 +7,7 @@ import { todos, users, type User } from "@/db/schema";
 import { todoListMembers, todoLists, type MemberRole, type TodoList } from "@modules/todo-lists/schema/todo-list.schema";
 import { MAX_TODOS_PER_LIST } from "@modules/todo-lists/limits";
 import { TodoAPI } from "@modules/todos/TodoAPI";
+import { TodoService } from "@modules/todos/TodoService";
 import { TodoCommentAPI } from "@modules/todos/TodoCommentAPI";
 import { todoComments } from "@modules/todos/schema/todo.comment.schema";
 import { createAuthHeader, generateTodo, generateUser, NON_EXISTENT_UUID } from "@tests/test.helpers";
@@ -112,6 +113,38 @@ describe("TodoAPI with lists", () => {
 
       expect(response.status).toBe(201);
       expect(response.body).toMatchObject({ version: 1, userId: owner.userId });
+    });
+  });
+
+  describe("concurrent changes between the access check and the update", () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it("should refuse to take a todo out of its list when its creator was deleted meanwhile", async () => {
+      const creator = await generateUser();
+      await addMember(list.listId, creator.userId, "editor");
+      const todo = await generateTodo(creator.userId, { listId: list.listId });
+      // the access check still sees the creator, the database does not anymore
+      const stale = { ...todo };
+      vi.spyOn(TodoService.prototype, "getTodoById").mockResolvedValue(stale);
+      await db.delete(users).where(eq(users.userId, creator.userId));
+
+      const response = await patch(owner, todo.todoId, { listId: null });
+
+      expect(response.status).toBe(409);
+      expect(response.text).toBe("A todo of a deleted user cannot leave its list");
+      expect((await todoById(todo.todoId)).listId).toBe(list.listId);
+    });
+
+    it("should answer 404 when the todo vanished between the access check and the update", async () => {
+      const todo = await generateTodo(owner.userId, { listId: list.listId });
+      vi.spyOn(TodoService.prototype, "getTodoById").mockResolvedValue({ ...todo });
+      await db.delete(todos).where(eq(todos.todoId, todo.todoId));
+
+      const response = await patch(owner, todo.todoId, { status: "finished" });
+
+      expect(response.status).toBe(404);
     });
   });
 

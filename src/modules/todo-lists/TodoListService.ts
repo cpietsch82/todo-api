@@ -4,6 +4,7 @@ import { BaseModule } from "@modules/core/BaseModule";
 import { hasPermission } from "@/modules/authorization/permissions";
 import { todos, type Todo } from "@/modules/todos/schema/todo.schema";
 import type { AccessingUser } from "@/modules/todos/TodoService";
+import { withRetryOnDeadlock } from "@/utils/dbErrors";
 import { todoListMembers, todoLists, type ListRole, type TodoList } from "./schema/todo-list.schema";
 
 /** a running transaction of the database */
@@ -112,7 +113,12 @@ export class TodoListService extends BaseModule {
    * @returns undefined when the list does not exist
    */
   async deleteList(listId: string, tx?: DbTransaction): Promise<TodoList | undefined> {
-    if (!tx) return db.transaction((ownTx) => this.deleteList(listId, ownTx));
+    // an own transaction is retried after a deadlock; a given one belongs to the caller, who decides on retrying
+    if (!tx) return withRetryOnDeadlock(() => db.transaction((ownTx) => this.deleteList(listId, ownTx)));
+
+    // lock the todos first (always ordered by id): a concurrent deletion of a creator waits for this transaction, or
+    // this one for it, and the statements below see its result (READ COMMITTED reads again per statement)
+    await tx.select({ todoId: todos.todoId }).from(todos).where(eq(todos.listId, listId)).orderBy(asc(todos.todoId)).for("update");
 
     await tx.delete(todos).where(and(eq(todos.listId, listId), isNull(todos.userId)));
     const [list] = await tx.delete(todoLists).where(eq(todoLists.listId, listId)).returning();

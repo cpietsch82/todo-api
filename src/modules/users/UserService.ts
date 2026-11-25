@@ -5,6 +5,7 @@ import { users, type NewUser, type UpdateUser, type User } from "./schema/user.s
 import { todos } from "@/modules/todos/schema/todo.schema";
 import { todoLists } from "@/modules/todo-lists/schema/todo-list.schema";
 import { TodoListService } from "@/modules/todo-lists/TodoListService";
+import { withRetryOnDeadlock } from "@/utils/dbErrors";
 
 export class UserService extends BaseModule {
   public static instance: UserService;
@@ -48,15 +49,21 @@ export class UserService extends BaseModule {
    * The order matters: deleting the own lists turns the own todos in them into todos without a list first.
    */
   async deleteUser(userId: string): Promise<User> {
-    return db.transaction(async (tx) => {
-      const ownLists = await tx.select({ listId: todoLists.listId }).from(todoLists).where(eq(todoLists.ownerId, userId));
-      for (const { listId } of ownLists) await new TodoListService().deleteList(listId, tx);
+    return withRetryOnDeadlock(() =>
+      db.transaction(async (tx) => {
+        // lock the own todos first (always ordered by id), see TodoListService.deleteList: a concurrent deletion of a
+        // list waits for this transaction or this one for it, and the statements below see its result
+        await tx.select({ todoId: todos.todoId }).from(todos).where(eq(todos.userId, userId)).orderBy(asc(todos.todoId)).for("update");
 
-      await tx.delete(todos).where(and(eq(todos.userId, userId), isNull(todos.listId)));
-      const [user] = await tx.delete(users).where(eq(users.userId, userId)).returning();
+        const ownLists = await tx.select({ listId: todoLists.listId }).from(todoLists).where(eq(todoLists.ownerId, userId));
+        for (const { listId } of ownLists) await new TodoListService().deleteList(listId, tx);
 
-      return user;
-    });
+        await tx.delete(todos).where(and(eq(todos.userId, userId), isNull(todos.listId)));
+        const [user] = await tx.delete(users).where(eq(users.userId, userId)).returning();
+
+        return user;
+      }),
+    );
   }
 }
 

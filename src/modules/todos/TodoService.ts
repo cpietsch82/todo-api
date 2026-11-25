@@ -1,6 +1,8 @@
 import { db } from "@/db";
 import { and, desc, eq, inArray, isNull, or } from "drizzle-orm";
 import { BaseModule } from "../core/BaseModule";
+import { HttpError } from "@/utils/HttpError";
+import { withRetryOnDeadlock } from "@/utils/dbErrors";
 import { todos, type UpdateTodo, type NewTodo, type Todo } from "@/modules/todos/schema/todo.schema";
 import { hasPermission, type Permission } from "@/modules/authorization/permissions";
 import { TodoListService } from "@/modules/todo-lists/TodoListService";
@@ -97,17 +99,30 @@ export class TodoService extends BaseModule {
     return todo;
   }
 
-  async updateTodo(todoId: string, updateData: UpdateTodo): Promise<Todo> {
-    const [todo] = await db
-      .update(todos)
-      .set({
-        ...updateData,
-        updatedAt: new Date(),
-      })
-      .where(eq(todos.todoId, todoId))
-      .returning();
+  /**
+   * Updates a todo under a lock of its row, so a concurrent deletion of its creator or its list cannot interleave:
+   * a todo whose creator was deleted cannot leave its list (it would belong to nobody, chk_todos_owner_or_list).
+   * @returns undefined when the todo does not exist (anymore)
+   * @throws HttpError 409 when a todo without creator should leave its list
+   */
+  async updateTodo(todoId: string, updateData: UpdateTodo): Promise<Todo | undefined> {
+    return withRetryOnDeadlock(() =>
+      db.transaction(async (tx) => {
+        const [current] = await tx.select({ userId: todos.userId }).from(todos).where(eq(todos.todoId, todoId)).for("update");
+        if (!current) return undefined;
 
-    return todo;
+        if (updateData.listId === null && current.userId === null) {
+          throw HttpError.conflict("A todo of a deleted user cannot leave its list");
+        }
+
+        const [todo] = await tx
+          .update(todos)
+          .set({ ...updateData, updatedAt: new Date() })
+          .where(eq(todos.todoId, todoId))
+          .returning();
+        return todo;
+      }),
+    );
   }
 
   async deleteTodo(todoId: string): Promise<Todo> {
