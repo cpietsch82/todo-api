@@ -75,6 +75,7 @@ export const todoListInvitations = pgTable(
 export type TodoList = typeof todoLists.$inferSelect;
 export type NewTodoList = Omit<typeof todoLists.$inferInsert, "listId" | "createdAt" | "updatedAt">;
 export type TodoListMember = typeof todoListMembers.$inferSelect;
+export type TodoListInvitation = typeof todoListInvitations.$inferSelect;
 export type MemberRole = (typeof todoListRoleEnum.enumValues)[number];
 /** the role of a user in a list, the owner included */
 export type ListRole = "owner" | MemberRole;

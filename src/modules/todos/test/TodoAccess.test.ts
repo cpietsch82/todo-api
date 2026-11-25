@@ -49,7 +49,6 @@ describe("todo access and discussion", () => {
     });
   });
 
-  // prepared for the discussion on shared todos, see the TODO(discussion) comments in TodoCommentService
   describe("TodoCommentService.getCommentsForTodo", () => {
     it("should return the comments of all users on the todo, oldest first, with the author", async () => {
       // written in a different order than created, so the test shows the order comes from createdAt
@@ -83,24 +82,24 @@ describe("todo access and discussion", () => {
   });
 
   describe("TodoCommentService.canDeleteComment", () => {
-    it("should let the author delete the own comment", () => {
-      expect(commentService.canDeleteComment({ userId: other.userId }, todo, asUser(other))).toBe(true);
+    it("should let the author delete the own comment", async () => {
+      expect(await commentService.canDeleteComment({ userId: other.userId }, todo, asUser(other))).toBe(true);
     });
 
-    it("should let the creator of the todo moderate the discussion", () => {
-      expect(commentService.canDeleteComment({ userId: other.userId }, todo, asUser(creator))).toBe(true);
+    it("should let the creator of the todo moderate the discussion", async () => {
+      expect(await commentService.canDeleteComment({ userId: other.userId }, todo, asUser(creator))).toBe(true);
     });
 
     it("should let an admin delete every comment", async () => {
       const admin = await generateUser();
 
-      expect(commentService.canDeleteComment({ userId: other.userId }, todo, asAdmin(admin))).toBe(true);
+      expect(await commentService.canDeleteComment({ userId: other.userId }, todo, asAdmin(admin))).toBe(true);
     });
 
     it("should not let another participant delete the comment", async () => {
       const participant = await generateUser();
 
-      expect(commentService.canDeleteComment({ userId: other.userId }, todo, asUser(participant))).toBe(false);
+      expect(await commentService.canDeleteComment({ userId: other.userId }, todo, asUser(participant))).toBe(false);
     });
   });
 });

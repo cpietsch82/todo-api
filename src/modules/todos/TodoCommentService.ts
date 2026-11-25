@@ -6,6 +6,7 @@ import { users } from "@/modules/users/schema/user.schema";
 import { asc, desc, eq } from "drizzle-orm";
 import { hasPermission } from "@/modules/authorization/permissions";
 import type { AccessingUser } from "./TodoService";
+import { TodoListService } from "@/modules/todo-lists/TodoListService";
 
 /** a comment as part of the discussion of a todo, with the author, so the others see who wrote it */
 export interface TodoDiscussionComment {
@@ -20,9 +21,11 @@ export interface TodoDiscussionComment {
 
 export class TodoCommentService extends BaseModule {
   public static instance: TodoCommentService;
+  protected todoListService: TodoListService;
 
   constructor() {
     super("todoComment.service", "Business logic for Todo Comment management");
+    this.todoListService = new TodoListService();
 
     if (!TodoCommentService.instance) {
       TodoCommentService.instance = this;
@@ -46,9 +49,6 @@ export class TodoCommentService extends BaseModule {
   /**
    * The discussion of a todo: the comments of all users, oldest first, so it reads like a conversation.
    * The caller has to check first that the user may see the todo (requireTodoAccess).
-   *
-   * TODO(discussion): not used yet. Will serve GET /api/todos/:todoId/comments (guarded by requireTodoAccess) once
-   * todos can be shared. Today GET /todo-comments only returns the own comments, so the others would not see them.
    */
   async getCommentsForTodo(todoId: string): Promise<TodoDiscussionComment[]> {
     const rows = await db
@@ -73,16 +73,20 @@ export class TodoCommentService extends BaseModule {
   }
 
   /**
-   * Who may remove a comment from a discussion: its author, an admin, and the creator of the todo, who moderates
-   * the discussion of the own todo. Changing the text stays with the author (requireTodoCommentOwnership), nobody
-   * should be able to put words into someone else's mouth.
-   *
-   * TODO(discussion): not used yet. Will replace requireTodoCommentOwnership on DELETE /api/todo-comments/:commentId
-   * once other users can comment on a todo; today all comments of a todo come from its creator (or an admin).
+   * Who may remove a comment from a discussion: its author, an admin, and whoever moderates the discussion: the owner
+   * of the list for a todo in a list, the creator for a todo without list. Changing the text stays with the author,
+   * nobody should be able to put words into someone else's mouth.
    */
-  canDeleteComment(comment: Pick<TodoComment, "userId">, todo: Pick<Todo, "userId">, user: AccessingUser): boolean {
-    if (hasPermission(user.permissions, "admin:all")) return true;
-    return comment.userId === user.id || todo.userId === user.id;
+  async canDeleteComment(
+    comment: Pick<TodoComment, "userId">,
+    todo: Pick<Todo, "userId" | "listId">,
+    user: AccessingUser,
+  ): Promise<boolean> {
+    if (hasPermission(user.permissions, "admin:all") || comment.userId === user.id) return true;
+    if (!todo.listId) return todo.userId === user.id;
+
+    const list = await this.todoListService.getListById(todo.listId);
+    return list !== undefined && (await this.todoListService.getListRole(list, user)) === "owner";
   }
 
   async createTodoComment(data: NewTodoComment): Promise<TodoComment> {

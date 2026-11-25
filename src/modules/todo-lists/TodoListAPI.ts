@@ -4,8 +4,12 @@ import { validateBody, validateParams } from "@/middleware/validate";
 import { requireListRole, requirePermissions } from "@/middleware/permissions";
 import { typedHandler } from "@/utils/typedHandler";
 import { HttpError } from "@/utils/HttpError";
-import type { TypedRequestBody } from "../express/Express";
+import { hasPermission } from "@/modules/authorization/permissions";
+import type { TypedRequest, TypedRequestBody } from "../express/Express";
 import { TodoListService } from "./TodoListService";
+import { TodoListMemberService } from "./TodoListMemberService";
+import { TodoListInvitationService } from "./TodoListInvitationService";
+import { createInvitationRateLimiter } from "@/middleware/rateLimit";
 import { MAX_LISTS_PER_USER } from "./limits";
 import {
   createTodoListSchema,
@@ -14,6 +18,18 @@ import {
   type CreateTodoListBody,
   type UpdateTodoListBody,
 } from "./schema/todo-list.schema";
+import {
+  changeMemberRoleSchema,
+  createInvitationSchema,
+  listInvitationParamsSchema,
+  listMemberParamsSchema,
+  transferListSchema,
+  type ChangeMemberRoleBody,
+  type CreateInvitationBody,
+  type ListInvitationParams,
+  type ListMemberParams,
+  type TransferListBody,
+} from "./schema/sharing.schema";
 
 /**
  * Lists of todos. Who may do what in a list follows from the role in it (requireListRole); the permissions of the
@@ -22,11 +38,15 @@ import {
 export class TodoListAPI extends APIModule {
   private static instance: TodoListAPI;
   private todoListService: TodoListService;
+  private memberService: TodoListMemberService;
+  private invitationService: TodoListInvitationService;
 
   constructor() {
     super("todo-list.api", "API Module for todo lists", "/todo-lists");
 
     this.todoListService = new TodoListService();
+    this.memberService = new TodoListMemberService();
+    this.invitationService = new TodoListInvitationService();
 
     if (!TodoListAPI.instance) {
       TodoListAPI.instance = this;
@@ -67,6 +87,54 @@ export class TodoListAPI extends APIModule {
       requireListRole("viewer"),
       this.getTodosOfList.bind(this),
     );
+
+    // members: every role sees them, the owner changes them, members may leave
+    const byMember = validateParams(listMemberParamsSchema);
+    this.router.get("/:listId/members", byId, requirePermissions("todo-lists:read"), requireListRole("viewer"), this.getMembers.bind(this));
+    this.router.patch(
+      "/:listId/members/:userId",
+      byMember,
+      requirePermissions("todo-lists:share"),
+      requireListRole("owner"),
+      validateBody(changeMemberRoleSchema),
+      typedHandler(this.changeMemberRole.bind(this)),
+    );
+    // leaving needs no permission beyond being in the list, removing others is checked in the handler
+    this.router.delete("/:listId/members/:userId", byMember, requireListRole("viewer"), typedHandler(this.removeMember.bind(this)));
+    this.router.post(
+      "/:listId/transfer",
+      byId,
+      requirePermissions("todo-lists:share"),
+      requireListRole("owner"),
+      validateBody(transferListSchema),
+      typedHandler(this.transferList.bind(this)),
+    );
+
+    // invitations: only the owner invites, sharing passes no rights on
+    this.router.get(
+      "/:listId/invitations",
+      byId,
+      requirePermissions("todo-lists:share"),
+      requireListRole("owner"),
+      this.getInvitations.bind(this),
+    );
+    this.router.post(
+      "/:listId/invitations",
+      byId,
+      requirePermissions("todo-lists:share"),
+      requireListRole("owner"),
+      // counts every attempt, also those for unknown usernames
+      createInvitationRateLimiter(),
+      validateBody(createInvitationSchema),
+      typedHandler(this.createInvitation.bind(this)),
+    );
+    this.router.delete(
+      "/:listId/invitations/:invitationId",
+      validateParams(listInvitationParamsSchema),
+      requirePermissions("todo-lists:share"),
+      requireListRole("owner"),
+      typedHandler(this.revokeInvitation.bind(this)),
+    );
   }
 
   private async getLists(req: Request, res: Response) {
@@ -93,7 +161,8 @@ export class TodoListAPI extends APIModule {
 
   private async updateList(req: TypedRequestBody<UpdateTodoListBody>, res: Response) {
     const { name, description } = req.body.updates;
-    const list = await this.todoListService.updateList(req.todoList!.listId, { name, description });
+    const { listId, ownerId } = req.todoList!;
+    const list = await this.todoListService.updateList(listId, { name, description }, ownerId);
     // deleted after requireListRole found it
     if (!list) throw HttpError.notFound();
     const summary = await this.todoListService.getListSummary(list, req.listRole!);
@@ -103,7 +172,8 @@ export class TodoListAPI extends APIModule {
   }
 
   private async deleteList(req: Request, res: Response) {
-    const list = await this.todoListService.deleteList(req.todoList!.listId);
+    const { listId, ownerId } = req.todoList!;
+    const list = await this.todoListService.deleteList(listId, undefined, ownerId);
     // deleted by someone else after requireListRole found it
     if (!list) throw HttpError.notFound();
     res.json(list);
@@ -111,6 +181,62 @@ export class TodoListAPI extends APIModule {
 
   private async getTodosOfList(req: Request, res: Response) {
     res.json(await this.todoListService.getTodosOfList(req.todoList!.listId));
+  }
+
+  private async getMembers(req: Request, res: Response) {
+    res.json(await this.memberService.getMembers(req.todoList!));
+  }
+
+  private async changeMemberRole(req: TypedRequest<ListMemberParams, ChangeMemberRoleBody>, res: Response) {
+    const list = req.todoList!;
+    res.json(await this.memberService.changeRole(list.listId, req.params.userId, req.body.role, list.ownerId));
+  }
+
+  private async getInvitations(req: Request, res: Response) {
+    res.json(await this.invitationService.getOpenInvitationsOfList(req.todoList!.listId));
+  }
+
+  private async createInvitation(req: TypedRequestBody<CreateInvitationBody>, res: Response) {
+    const { listId, ownerId } = req.todoList!;
+    const { username, role } = req.body;
+    const invitation = await this.invitationService.createInvitation(listId, username, role, req.user!.id, ownerId);
+    res.status(201).json(invitation);
+  }
+
+  private async revokeInvitation(req: TypedRequest<ListInvitationParams>, res: Response) {
+    const { listId, ownerId } = req.todoList!;
+    const invitation = await this.invitationService.revokeInvitation(listId, req.params.invitationId, ownerId);
+    if (!invitation) throw HttpError.notFound("Invitation not found");
+    res.json(invitation);
+  }
+
+  /** Hands the list over to a member; answers with the list as the requesting user sees it now. */
+  private async transferList(req: TypedRequestBody<TransferListBody>, res: Response) {
+    const user = req.user!;
+    const { listId, ownerId } = req.todoList!;
+    const list = await this.memberService.transferList(listId, req.body.userId, user.id, ownerId);
+
+    const myRole = await this.todoListService.getListRole(list, user);
+    const summary = myRole ? await this.todoListService.getListSummary(list, myRole) : undefined;
+    // deleted right after the transfer
+    if (!summary) throw HttpError.notFound();
+    res.json(summary);
+  }
+
+  /** A member leaves the list, or the owner removes someone else. */
+  private async removeMember(req: TypedRequest<ListMemberParams>, res: Response) {
+    const list = req.todoList!;
+    const { userId } = req.params;
+
+    if (userId === req.user!.id) {
+      res.json(await this.memberService.removeMember(list.listId, userId));
+      return;
+    }
+
+    if (req.listRole !== "owner" || !hasPermission(req.user!.permissions, "todo-lists:share")) {
+      throw HttpError.forbidden("Removing others needs the owner role");
+    }
+    res.json(await this.memberService.removeMember(list.listId, userId, list.ownerId));
   }
 }
 
