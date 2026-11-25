@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, beforeEach } from "vitest";
 import request from "supertest";
-import type { Express } from "express";
+import type { Server } from "node:http";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { todos, users, type User } from "@/db/schema";
@@ -8,7 +8,7 @@ import { todoListMembers, todoLists, type MemberRole, type TodoList } from "@mod
 import { MAX_TODOS_PER_LIST } from "@modules/todo-lists/limits";
 import { TodoAPI } from "@modules/todos/TodoAPI";
 import { createAuthHeader, generateTodo, generateUser, NON_EXISTENT_UUID } from "@tests/test.helpers";
-import { getTestApp } from "@tests/integration.setup";
+import { getTestServer } from "@tests/integration.setup";
 
 /** a todo record that passes the create schema */
 const TODO = { title: "Milch kaufen", description: "", status: "not_ready", tags: [] };
@@ -25,7 +25,7 @@ async function addMember(listId: string, userId: string, role: MemberRole) {
 const todoById = async (todoId: string) => (await db.select().from(todos).where(eq(todos.todoId, todoId)))[0];
 
 describe("TodoAPI with lists", () => {
-  let server: Express;
+  let server: Server;
   let owner: User;
   let editor: User;
   let viewer: User;
@@ -34,7 +34,7 @@ describe("TodoAPI with lists", () => {
 
   beforeAll(() => {
     new TodoAPI();
-    server = getTestApp();
+    server = getTestServer();
   });
 
   beforeEach(async () => {

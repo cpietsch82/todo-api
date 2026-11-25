@@ -1,11 +1,15 @@
 // tests/setup/integration.setup.ts
 import { beforeAll, afterAll, afterEach } from "vitest";
 import { Express } from "express";
+import type { Server } from "node:http";
 import { ExpressAPI } from "../src/modules/express/Express";
+import { listenOnLoopback } from "./supertest.loopback";
 import { db } from "@/db";
 import { todos, todoLists, users, authentications, deployments, containerStatus, containerLogRequests } from "@/db/schema";
 
 let app: Express | null = null;
+// the server the tests send their requests to, see listenOnLoopback
+let testServer: Server | null = null;
 let isInitialized = false;
 
 /**
@@ -20,6 +24,7 @@ export async function setupIntegrationTests(): Promise<Express> {
   const api = new ExpressAPI();
   api.listen();
   app = api.getApp();
+  testServer = await listenOnLoopback(app);
 
   isInitialized = true;
   console.log("Integration Test setup complete\n")
@@ -28,7 +33,17 @@ export async function setupIntegrationTests(): Promise<Express> {
 }
 
 /**
- * Return Express app (lazy)
+ * The server to hand to supertest (request(getTestServer())), already listening on the IPv4 loopback.
+ */
+export function getTestServer(): Server {
+  if (!testServer) {
+    throw new Error("Test server not initialized. Did you call setupIntegrationTests()?");
+  }
+  return testServer;
+}
+
+/**
+ * Return Express app (lazy). Send requests to getTestServer() instead, see listenOnLoopback.
  */
 export function getTestApp(): Express {
   if (!app) {
@@ -56,6 +71,11 @@ export async function cleanupDatabase() {
 }
 
 export async function teardownIntegrationTests() {
+  if (testServer) {
+    const server = testServer;
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    testServer = null;
+  }
   if (app) {
     const api = new ExpressAPI();
     await api.close();

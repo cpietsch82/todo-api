@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
 import request from "supertest";
+import type { Server } from "node:http";
 import type { Express, Request, Response } from "express";
 import { ExpressAPI } from "@modules/express/Express";
 import { VersionService } from "@modules/express/VersionService";
@@ -9,15 +10,15 @@ import { HttpError } from "@/utils/HttpError";
 import { DrizzleQueryError } from "drizzle-orm/errors";
 import env from "../../../../env";
 import { createAuthHeader, generateUser, UUID_REGEX } from "@tests/test.helpers";
-import { getTestApp } from "@tests/integration.setup";
+import { getTestApp, getTestServer } from "@tests/integration.setup";
 import packageJson from "../../../../package.json";
 
 describe("ExpressAPI", () => {
-  let server: Express;
+  let server: Server;
   let api: ExpressAPI;
 
   beforeAll(() => {
-    server = getTestApp();
+    server = getTestServer();
     api = new ExpressAPI();
 
     // routes without authentication, used to check the predefined response helpers
@@ -141,7 +142,7 @@ describe("ExpressAPI", () => {
     });
 
     it("should expose the express app, the router and the running server", () => {
-      expect(api.getApp()).toBe(server);
+      expect(api.getApp()).toBe(getTestApp());
       expect(api.getRouter()).toBeDefined();
       expect(api.getServer()).not.toBeNull();
       expect(api.getServer()?.listening).toBe(true);

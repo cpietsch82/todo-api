@@ -1,19 +1,19 @@
 import { describe, it, expect, beforeAll, beforeEach } from "vitest";
 import request from "supertest";
+import type { Server } from "node:http";
 import { TodoAPI } from "@modules/todos/TodoAPI";
 import { User } from "@/db/schema";
-import type { Express } from "express";
 
 import { createAuthHeader, generateTodo, generateUser, NON_EXISTENT_UUID } from "@tests/test.helpers";
-import { getTestApp } from "@tests/integration.setup";
+import { getTestServer } from "@tests/integration.setup";
 
 describe("TodoAPI", () => {
   let testUser: User;
-  let server: Express;
+  let server: Server;
 
   beforeAll(async () => {
     new TodoAPI();
-    server = getTestApp();
+    server = getTestServer();
   });
 
   beforeEach(async () => {

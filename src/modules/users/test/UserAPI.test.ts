@@ -1,18 +1,18 @@
 import { describe, it, expect, beforeAll, beforeEach } from "vitest";
 import request from "supertest";
-import type { Express } from "express";
+import type { Server } from "node:http";
 import { UserAPI } from "@modules/users/UserAPI";
 import { User } from "@/db/schema";
 import { createAuthHeader, generateUser, NON_EXISTENT_UUID } from "@tests/test.helpers";
-import { getTestApp } from "@tests/integration.setup";
+import { getTestServer } from "@tests/integration.setup";
 
 describe("UserAPI", () => {
-  let server: Express;
+  let server: Server;
   let testUser: User;
 
   beforeAll(async () => {
     new UserAPI();
-    server = getTestApp();
+    server = getTestServer();
   });
 
   beforeEach(async () => {

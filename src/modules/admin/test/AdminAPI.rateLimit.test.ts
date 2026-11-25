@@ -1,21 +1,21 @@
 import { describe, it, expect, beforeAll, vi } from "vitest";
 import request from "supertest";
-import type { Express } from "express";
+import type { Server } from "node:http";
 import env from "../../../../env";
 import { AdminAPI } from "@modules/admin/AdminAPI";
 import AuthorizationService from "@modules/authorization/AuthorizationService";
 import { createAuthHeader, generateUser } from "@tests/test.helpers";
-import { getTestApp } from "@tests/integration.setup";
+import { getTestServer } from "@tests/integration.setup";
 
 describe("AdminAPI rate limit of the docker operations", () => {
-  let server: Express;
+  let server: Server;
 
   beforeAll(() => {
     // the limiters read the limit when the routes are created
     vi.spyOn(env, "DOCKER_OPERATION_RATE_LIMIT_MAX", "get").mockReturnValue(2);
 
     new AdminAPI();
-    server = getTestApp();
+    server = getTestServer();
   });
 
   it("should limit the operations per IP, also the rejected ones", async () => {
