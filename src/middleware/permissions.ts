@@ -4,6 +4,7 @@ import AuthorizationService from "@/modules/authorization/AuthorizationService";
 import { TodoCommentService } from "@/modules/todos/TodoCommentService";
 import { TodoService, type AccessingUser } from "@/modules/todos/TodoService";
 import type { Todo } from "@/modules/todos/schema/todo.schema";
+import type { TodoComment } from "@/modules/todos/schema/todo.comment.schema";
 import UserService from "@/modules/users/UserService";
 import { TodoListService } from "@/modules/todo-lists/TodoListService";
 import { hasListRole } from "@/modules/todo-lists/listRoles";
@@ -235,6 +236,72 @@ export function requireTodoCommentOwnership(
       return todoComment?.userId;
     },
     "You are not allowed to access this todo comment",
+  );
+}
+
+type TodoCommentCheck = (comment: TodoComment, todo: Todo, user: AccessingUser) => Promise<boolean>;
+
+/**
+ * Loads the comment of the route and its todo and checks the access with the given rule.
+ * 404 when the comment (or its todo) does not exist, 403 with the reason in the log when the rule does not allow it.
+ */
+function createTodoCommentCheck(
+  isAllowed: TodoCommentCheck,
+  reason: string,
+  todoCommentService: TodoCommentService,
+  todoService: TodoService,
+): RequestHandler {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    const user = getAuthenticatedUser(req, res);
+    if (!user) return;
+
+    const comment = await todoCommentService.getTodoCommentById(req.params.commentId as string);
+    const todo = comment ? await todoService.getTodoById(comment.todoId) : undefined;
+    if (!comment || !todo) {
+      res.respondNotFound();
+      return;
+    }
+
+    if (!(await isAllowed(comment, todo, user))) {
+      res.respondAuthorizationInsufficient(reason, true);
+      return;
+    }
+
+    next();
+  };
+}
+
+/**
+ * Requires the right to remove the comment of the route from its discussion (TodoCommentService.canDeleteComment):
+ * the author, the moderator of the discussion (owner of the list, creator of a todo without list) or an admin.
+ */
+export function requireTodoCommentDeleteAccess(
+  todoCommentService: TodoCommentService = new TodoCommentService(),
+  todoService: TodoService = new TodoService(),
+): RequestHandler {
+  return createTodoCommentCheck(
+    (comment, todo, user) => todoCommentService.canDeleteComment(comment, todo, user),
+    "Not allowed to delete this comment",
+    todoCommentService,
+    todoService,
+  );
+}
+
+/**
+ * Requires the right to change the comment of the route: its author (or an admin) who can still see the todo, so a
+ * removed member cannot change what the list reads anymore.
+ */
+export function requireTodoCommentEditAccess(
+  todoCommentService: TodoCommentService = new TodoCommentService(),
+  todoService: TodoService = new TodoService(),
+): RequestHandler {
+  return createTodoCommentCheck(
+    async (comment, todo, user) =>
+      (hasPermission(user.permissions, "admin:all") || comment.userId === user.id) &&
+      (await todoService.canAccessTodo(todo, user)),
+    "Only the author with access to the todo may change a comment",
+    todoCommentService,
+    todoService,
   );
 }
 
