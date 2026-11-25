@@ -300,7 +300,7 @@ of `ExpressAPI` (`respondBadRequest`, `respondConflict`, `respondAuthorizationRe
   (e.g. emails or password hashes) are replaced by `[REDACTED]`, and common secret fields (`password`, `token`,
   `refreshToken`, `authorization`, ...) are censored when they are logged as part of an object.
 - For development set `EXPOSE_ERROR_DETAILS=true` to receive the complete message and stack trace in the response,
-  and the reason of a 403.
+  and the reason of a 403. They are cleaned like the logs, the values of a failed query are replaced by `[REDACTED]`.
 
 ## Authentication
 

@@ -6,6 +6,7 @@ import { VersionService } from "@modules/express/VersionService";
 import { db } from "@/db";
 import { logger } from "@/utils/logger";
 import { HttpError } from "@/utils/HttpError";
+import { DrizzleQueryError } from "drizzle-orm/errors";
 import env from "../../../../env";
 import { createAuthHeader, generateUser, UUID_REGEX } from "@tests/test.helpers";
 import { getTestApp } from "@tests/integration.setup";
@@ -88,6 +89,14 @@ describe("ExpressAPI", () => {
       throw Object.assign(new Error("Failed query: insert into todos ..."), {
         cause: Object.assign(new Error("violates foreign key constraint"), { code: "23503" }),
       });
+    });
+    open.get("/throw-failed-query", () => {
+      // a failed query as drizzle reports it: the values of the query are part of message and stack
+      throw new DrizzleQueryError(
+        'select * from "authentications" where "password" = $1 and "email" = $2',
+        ["$2b$10$secretPasswordHash", "jane@example.com"],
+        Object.assign(new Error("connection terminated"), { code: "57P01" }),
+      );
     });
     open.get("/throw-string", () => {
       throw "plain string failure";
@@ -503,6 +512,17 @@ describe("ExpressAPI", () => {
 
         expect(response.status).toBe(409);
         expect(response.text).toContain("Failed query");
+      });
+
+      it("should not send the values of a failed query, only the query with its placeholders", async () => {
+        const response = await request(server).get("/api/express-test/throw-failed-query");
+
+        expect(response.status).toBe(500);
+        expect(response.text).toContain('select * from "authentications"');
+        expect(response.text).toContain("params: [REDACTED]");
+        expect(response.text).toContain("at ");
+        expect(response.text).not.toContain("secretPasswordHash");
+        expect(response.text).not.toContain("jane@example.com");
       });
 
       it("should keep the message of an HttpError without a stack trace", async () => {

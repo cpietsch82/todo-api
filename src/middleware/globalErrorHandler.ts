@@ -1,4 +1,4 @@
-import { logger } from "@/utils/logger";
+import { logger, serializeError } from "@/utils/logger";
 import env from "../../env";
 import { HttpError } from "@/utils/HttpError";
 import { isForeignKeyViolation, isUniqueViolation } from "@/utils/dbErrors";
@@ -88,7 +88,9 @@ export const globalErrorHandler = (messagePrefix = "") => {
 
     let message: string;
     if (env.EXPOSE_ERROR_DETAILS && !(caughtError instanceof HttpError)) {
-      message = `${caughtError.message}\n\n${caughtError.stack ?? ""}`.trim();
+      // cleaned like the logs: a failed query keeps its text, but not its values (password hashes, e-mails, ...)
+      const { message: detail, stack } = serializeError(caughtError) as { message?: string; stack?: string };
+      message = `${detail ?? ""}\n\n${stack ?? ""}`.trim();
     } else if (publicMessage !== undefined) {
       message = publicMessage;
     } else {
