@@ -3,6 +3,7 @@ import { TodoAPI } from "@modules/todos/TodoAPI";
 import { TodoCommentAPI } from "@modules/todos/TodoCommentAPI";
 import { TodoListAPI } from "@modules/todo-lists/TodoListAPI";
 import { TodoListInvitationAPI } from "@modules/todo-lists/TodoListInvitationAPI";
+import { TodoListContactAPI } from "@modules/todo-lists/TodoListContactAPI";
 import { AuthenticationAPI } from "@/modules/authentication/AuthenticationAPI";
 import { UserAPI } from "./modules/users/UserAPI";
 import { AdminAPI } from "./modules/admin/AdminAPI";
@@ -24,6 +25,7 @@ async function bootstrap() {
   new TodoCommentAPI();
   new TodoListAPI();
   new TodoListInvitationAPI();
+  new TodoListContactAPI();
   new UserAPI();
   new AdminAPI();
   expressAPI.listen();

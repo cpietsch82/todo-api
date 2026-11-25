@@ -1,5 +1,5 @@
 import { db } from "@/db";
-import { and, asc, count, eq } from "drizzle-orm";
+import { and, asc, count, eq, inArray, ne, or } from "drizzle-orm";
 import { BaseModule } from "@modules/core/BaseModule";
 import { users } from "@/modules/users/schema/user.schema";
 import { HttpError } from "@/utils/HttpError";
@@ -46,6 +46,35 @@ export class TodoListMemberService extends BaseModule {
       .orderBy(asc(users.username), asc(users.userId));
 
     return [...(owner ? [{ ...owner, role: "owner" as const }] : []), ...members];
+  }
+
+  /**
+   * The users who currently share a list with the user: the owners of the lists the user is a member of, and the
+   * members of all lists the user owns or is a member of. No user directory: whoever shares nothing with the user,
+   * admins included, gets nobody. Former contacts are not kept.
+   */
+  async getContacts(userId: string): Promise<{ userId: string; username: string }[]> {
+    const ownLists = db.select({ listId: todoLists.listId }).from(todoLists).where(eq(todoLists.ownerId, userId));
+    const memberLists = db
+      .select({ listId: todoListMembers.listId })
+      .from(todoListMembers)
+      .where(eq(todoListMembers.userId, userId));
+    const isMyList = (listId: typeof todoLists.listId | typeof todoListMembers.listId) =>
+      or(inArray(listId, ownLists), inArray(listId, memberLists));
+
+    const ownersOfMyLists = db.select({ userId: todoLists.ownerId }).from(todoLists).where(isMyList(todoLists.listId));
+    const membersOfMyLists = db
+      .select({ userId: todoListMembers.userId })
+      .from(todoListMembers)
+      .where(isMyList(todoListMembers.listId));
+
+    return db
+      .select({ userId: users.userId, username: users.username })
+      .from(users)
+      .where(
+        and(ne(users.userId, userId), or(inArray(users.userId, ownersOfMyLists), inArray(users.userId, membersOfMyLists))),
+      )
+      .orderBy(asc(users.username), asc(users.userId));
   }
 
   /**
