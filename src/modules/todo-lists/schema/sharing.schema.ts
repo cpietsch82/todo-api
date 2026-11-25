@@ -23,6 +23,10 @@ export const listInvitationParamsSchema = z.object({
   invitationId: z.uuid("Invalid InvitationId"),
 });
 
+export const invitationByIdSchema = z.object({
+  invitationId: z.uuid("Invalid InvitationId"),
+});
+
 /**
  * Looser than the rules of the registration on purpose: an old username that does not meet today's rules should
  * still be found (404 instead of 400). Normalized like at the registration, the case is ignored by the lookup.
@@ -37,3 +41,4 @@ export type ChangeMemberRoleBody = z.infer<typeof changeMemberRoleSchema>;
 export type TransferListBody = z.infer<typeof transferListSchema>;
 export type ListInvitationParams = z.infer<typeof listInvitationParamsSchema>;
 export type CreateInvitationBody = z.infer<typeof createInvitationSchema>;
+export type InvitationByIdParams = z.infer<typeof invitationByIdSchema>;

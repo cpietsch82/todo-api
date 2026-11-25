@@ -6,7 +6,14 @@ import { HttpError } from "@/utils/HttpError";
 import { withRetryOnDeadlock } from "@/utils/dbErrors";
 import { lockList, lockUsers } from "./locks";
 import { INVITATION_LIFETIME_MS, MAX_MEMBERS_PER_LIST, MAX_OPEN_INVITATIONS_PER_LIST } from "./limits";
-import { todoListInvitations, todoListMembers, type MemberRole } from "./schema/todo-list.schema";
+import {
+  todoListInvitations,
+  todoListMembers,
+  todoLists,
+  type MemberRole,
+  type TodoList,
+  type TodoListInvitation,
+} from "./schema/todo-list.schema";
 
 /** an open invitation as the owner of the list sees it: no e-mail, no names of the invited user */
 export interface ListInvitation {
@@ -16,6 +23,15 @@ export interface ListInvitation {
   role: MemberRole;
   createdAt: Date;
   expiresAt: Date;
+}
+
+/** an open invitation as the invited user sees it */
+export interface ReceivedInvitation {
+  invitationId: string;
+  role: MemberRole;
+  expiresAt: Date;
+  list: { listId: string; name: string };
+  invitedBy: { userId: string; username: string };
 }
 
 const isExpired = () => lte(todoListInvitations.expiresAt, new Date());
@@ -154,6 +170,109 @@ export class TodoListInvitationService extends BaseModule {
       createdAt: revoked.createdAt,
       expiresAt: revoked.expiresAt,
     };
+  }
+
+  async getInvitationById(invitationId: string): Promise<TodoListInvitation | undefined> {
+    const [invitation] = await db
+      .select()
+      .from(todoListInvitations)
+      .where(eq(todoListInvitations.invitationId, invitationId))
+      .limit(1);
+    return invitation;
+  }
+
+  /** The open invitations of a user, oldest first. Deletes the expired ones of the user. */
+  async getInvitationsForUser(userId: string): Promise<ReceivedInvitation[]> {
+    await db.delete(todoListInvitations).where(and(eq(todoListInvitations.inviteeId, userId), isExpired()));
+
+    const rows = await db
+      .select({
+        invitationId: todoListInvitations.invitationId,
+        role: todoListInvitations.role,
+        expiresAt: todoListInvitations.expiresAt,
+        listId: todoLists.listId,
+        listName: todoLists.name,
+        inviterId: users.userId,
+        inviterUsername: users.username,
+      })
+      .from(todoListInvitations)
+      .innerJoin(todoLists, eq(todoLists.listId, todoListInvitations.listId))
+      .innerJoin(users, eq(users.userId, todoListInvitations.invitedBy))
+      .where(and(eq(todoListInvitations.inviteeId, userId), isOpen()))
+      .orderBy(asc(todoListInvitations.createdAt), asc(todoListInvitations.invitationId));
+
+    return rows.map(({ invitationId, role, expiresAt, listId, listName, inviterId, inviterUsername }) => ({
+      invitationId,
+      role,
+      expiresAt,
+      list: { listId, name: listName },
+      invitedBy: { userId: inviterId, username: inviterUsername },
+    }));
+  }
+
+  /**
+   * Makes the invited user a member with the role of the invitation. Checked again under the lock of the list: the
+   * invitation may have been revoked or the list filled up meanwhile (design 7.2).
+   * @throws HttpError 404 unknown, expired or meanwhile revoked invitation, 403 invitation of another user, 409 full list
+   */
+  async acceptInvitation(invitationId: string, userId: string): Promise<TodoList> {
+    const invitation = await this.getOwnOpenInvitation(invitationId, userId);
+
+    return withRetryOnDeadlock(() =>
+      db.transaction(async (tx) => {
+        // the new member row references the user and the inviter (added_by): lock both before the list
+        await lockUsers(tx, [userId, invitation.invitedBy]);
+        const list = await lockList(tx, invitation.listId);
+
+        const [current] = await tx
+          .select()
+          .from(todoListInvitations)
+          .where(
+            and(
+              eq(todoListInvitations.invitationId, invitationId),
+              eq(todoListInvitations.inviteeId, userId),
+              isOpen(),
+            ),
+          )
+          .for("update");
+        if (!current) throw HttpError.notFound("Invitation not found");
+
+        const [{ value: members }] = await tx
+          .select({ value: count() })
+          .from(todoListMembers)
+          .where(eq(todoListMembers.listId, list.listId));
+        if (members >= MAX_MEMBERS_PER_LIST) throw HttpError.conflict("List has reached the member limit");
+
+        await tx
+          .insert(todoListMembers)
+          .values({ listId: list.listId, userId, role: current.role, addedBy: current.invitedBy });
+        await tx.delete(todoListInvitations).where(eq(todoListInvitations.invitationId, invitationId));
+        return list;
+      }),
+    );
+  }
+
+  /** @throws HttpError 404 unknown or expired invitation, 403 invitation of another user */
+  async declineInvitation(invitationId: string, userId: string): Promise<void> {
+    await this.getOwnOpenInvitation(invitationId, userId);
+    await db
+      .delete(todoListInvitations)
+      .where(and(eq(todoListInvitations.invitationId, invitationId), eq(todoListInvitations.inviteeId, userId)));
+  }
+
+  /**
+   * The invitation if it goes to the user and is still open. An expired one is deleted. Only the invited user may
+   * answer an invitation, admins included: nobody can be made a member without the own consent.
+   */
+  private async getOwnOpenInvitation(invitationId: string, userId: string): Promise<TodoListInvitation> {
+    const invitation = await this.getInvitationById(invitationId);
+    if (!invitation) throw HttpError.notFound("Invitation not found");
+    if (invitation.inviteeId !== userId) throw HttpError.forbidden("Invitation of another user");
+    if (invitation.expiresAt.getTime() <= Date.now()) {
+      await db.delete(todoListInvitations).where(eq(todoListInvitations.invitationId, invitationId));
+      throw HttpError.notFound("Invitation not found");
+    }
+    return invitation;
   }
 }
 
