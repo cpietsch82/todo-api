@@ -3,7 +3,7 @@ import { beforeAll, afterAll, afterEach } from "vitest";
 import { Express } from "express";
 import { ExpressAPI } from "../src/modules/express/Express";
 import { db } from "@/db";
-import { todos, users, authentications, deployments, containerStatus, containerLogRequests } from "@/db/schema";
+import { todos, todoLists, users, authentications, deployments, containerStatus, containerLogRequests } from "@/db/schema";
 
 let app: Express | null = null;
 let isInitialized = false;
@@ -49,6 +49,8 @@ export async function cleanupDatabase() {
   await db.delete(containerStatus);
   await db.delete(containerLogRequests);
   await db.delete(todos);
+  // members and invitations go with their list
+  await db.delete(todoLists);
   await db.delete(authentications);
   await db.delete(users);
 }

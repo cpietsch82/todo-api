@@ -155,7 +155,8 @@ export function requireTodoOwnership(todoService: TodoService = new TodoService(
   return createOwnershipMiddleware(
     async (req) => {
       const todo = await todoService.getTodoById(req.params.todoId as string);
-      return todo?.userId;
+      // a todo whose creator was deleted has no owner left (replaced by the list based check in the next step)
+      return todo?.userId ?? undefined;
     },
     "You are not allowed to access this todo",
   );
