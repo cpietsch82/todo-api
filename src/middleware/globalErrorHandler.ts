@@ -1,7 +1,7 @@
 import { logger, serializeError } from "@/utils/logger";
 import env from "../../env";
 import { HttpError } from "@/utils/HttpError";
-import { isForeignKeyViolation, isUniqueViolation } from "@/utils/dbErrors";
+import { isCheckViolation, isForeignKeyViolation, isUniqueViolation } from "@/utils/dbErrors";
 import { randomUUID } from "crypto";
 import { STATUS_CODES } from "http";
 import type { NextFunction, Request, Response } from "express";
@@ -26,6 +26,8 @@ function resolveError(error: ErrorWithStatus): ResolvedError {
 
   if (isUniqueViolation(error)) return { status: 409, publicMessage: "Resource already exists" };
   if (isForeignKeyViolation(error)) return { status: 400, publicMessage: "Referenced resource does not exist" };
+  // a rule of the database (e.g. chk_todos_owner_or_list) refused a change that a concurrent request made invalid
+  if (isCheckViolation(error)) return { status: 409, publicMessage: "Conflict with the current state, please try again" };
 
   const rawStatus = error.status ?? error.statusCode;
   const status =

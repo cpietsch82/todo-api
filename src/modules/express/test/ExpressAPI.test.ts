@@ -86,6 +86,11 @@ describe("ExpressAPI", () => {
         cause: Object.assign(new Error("duplicate key value"), { code: "23505" }),
       });
     });
+    open.get("/throw-check-violation", () => {
+      throw Object.assign(new Error("Failed query: update todos ... params: secret@mail.com"), {
+        cause: Object.assign(new Error("violates check constraint"), { code: "23514" }),
+      });
+    });
     open.get("/throw-foreign-key-violation", () => {
       throw Object.assign(new Error("Failed query: insert into todos ..."), {
         cause: Object.assign(new Error("violates foreign key constraint"), { code: "23503" }),
@@ -442,6 +447,14 @@ describe("ExpressAPI", () => {
 
       expect(response.status).toBe(409);
       expect(response.text).toBe("Resource already exists");
+      expect(response.text).not.toContain("secret@mail.com");
+    });
+
+    it("should map a check violation to 409 without leaking the query", async () => {
+      const response = await request(server).get("/api/express-test/throw-check-violation");
+
+      expect(response.status).toBe(409);
+      expect(response.text).toBe("Conflict with the current state, please try again");
       expect(response.text).not.toContain("secret@mail.com");
     });
 
