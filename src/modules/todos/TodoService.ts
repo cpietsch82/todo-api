@@ -17,9 +17,11 @@ export interface AccessingUser {
 
 export class TodoService extends BaseModule {
   public static instance: TodoService;
+  protected todoListService: TodoListService;
 
   constructor() {
     super("todo.service", "Business logic for Todo management");
+    this.todoListService = new TodoListService();
 
     if (!TodoService.instance) {
       TodoService.instance = this;
@@ -88,9 +90,8 @@ export class TodoService extends BaseModule {
   }
 
   private async getRoleInListOf(listId: string, user: AccessingUser): Promise<ListRole | undefined> {
-    const todoListService = new TodoListService();
-    const list = await todoListService.getListById(listId);
-    return list ? todoListService.getListRole(list, user) : undefined;
+    const list = await this.todoListService.getListById(listId);
+    return list ? this.todoListService.getListRole(list, user) : undefined;
   }
 
   async createTodo(data: NewTodo): Promise<Todo> {
@@ -125,7 +126,8 @@ export class TodoService extends BaseModule {
     );
   }
 
-  async deleteTodo(todoId: string): Promise<Todo> {
+  /** @returns undefined when the todo does not exist (anymore) */
+  async deleteTodo(todoId: string): Promise<Todo | undefined> {
     const [todo] = await db.delete(todos).where(eq(todos.todoId, todoId)).returning();
 
     return todo;

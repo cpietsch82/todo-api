@@ -16,6 +16,8 @@ declare global {
       todoList?: TodoList;
       /** set by requireListRole: the role of the current user in that list */
       listRole?: ListRole;
+      /** set by requireTodoAccess, requireTodoEditAccess and requireTodoDeleteAccess: the todo of the route */
+      todo?: Todo;
     }
   }
 }
@@ -190,6 +192,8 @@ function createTodoAccessCheck(
       return;
     }
 
+    // the handler uses it instead of loading the todo again
+    req.todo = todo;
     next();
   };
 }

@@ -141,6 +141,32 @@ describe("TodoAPI with lists", () => {
     });
   });
 
+  describe("loading the todo", () => {
+    it("should load the todo only once per request", async () => {
+      const todo = await generateTodo(owner.userId, { listId: list.listId });
+      const header = await createAuthHeader(owner);
+      const load = vi.spyOn(TodoService.prototype, "getTodoById");
+
+      await request(server).get(`/api/todos/${todo.todoId}`).set(header);
+      expect(load).toHaveBeenCalledTimes(1);
+
+      await request(server).patch(`/api/todos/${todo.todoId}`).set(header).send({ updates: { status: "finished" } });
+      expect(load).toHaveBeenCalledTimes(2);
+
+      await request(server).delete(`/api/todos/${todo.todoId}`).set(header);
+      expect(load).toHaveBeenCalledTimes(3);
+    });
+
+    it("should answer 404 when the todo vanished before DELETE", async () => {
+      const todo = await generateTodo(owner.userId, { listId: list.listId });
+      vi.spyOn(TodoService.prototype, "deleteTodo").mockResolvedValue(undefined);
+
+      const response = await request(server).delete(`/api/todos/${todo.todoId}`).set(await createAuthHeader(owner));
+
+      expect(response.status).toBe(404);
+    });
+  });
+
   describe("concurrent changes between the access check and the update", () => {
     it("should refuse to take a todo out of its list when its creator was deleted meanwhile", async () => {
       const creator = await generateUser();

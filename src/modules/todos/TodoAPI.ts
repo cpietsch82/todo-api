@@ -83,11 +83,8 @@ export class TodoAPI extends APIModule {
    * Get a todo record by id. If no record was found it returns with status 404.
    */
   private async getTodoById(req: TypedRequestParams<TodoByIdParams>, res: Response) {
-    const { todoId } = req.params;
-
-    const todo = await this.todoService.getTodoById(todoId);
-    if (!todo) return res.respondNotFound();
-    res.json(todo);
+    // loaded by requireTodoAccess, which answers 404 for an unknown todo
+    res.json(req.todo!);
   }
 
   /**
@@ -110,10 +107,8 @@ export class TodoAPI extends APIModule {
   private async updateTodo(req: TypedRequest<TodoByIdParams, UpdateTodoBody>, res: Response) {
     const { todoId } = req.params;
     const { updates } = req.body;
-    // TODO: überprüfen, ob ich das hier überhaupt brauche, wenn ich ein Update auf eine Id machen will, die nicht existiert!
-    // Denn somit könnte ich mir dann einen DB Call sparen!
-    const todo = await this.todoService.getTodoById(todoId);
-    if (!todo) return res.respondNotFound();
+    // loaded by requireTodoEditAccess, which answers 404 for an unknown todo
+    const todo = req.todo!;
 
     if (updates.listId !== undefined && updates.listId !== todo.listId) {
       await this.ensureCanMove(todo, updates.listId, req.user!);
@@ -160,6 +155,8 @@ export class TodoAPI extends APIModule {
     const { todoId } = req.params;
 
     const deletedTodo = await this.todoService.deleteTodo(todoId);
+    // deleted by someone else after the access check
+    if (!deletedTodo) return res.respondNotFound();
     res.json(deletedTodo);
   }
 }
