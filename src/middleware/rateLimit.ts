@@ -91,3 +91,16 @@ export const createRegisterRateLimiter = () =>
     limit: env.REGISTER_RATE_LIMIT_MAX,
     message: "Too many registrations from this IP, please try again later.",
   });
+
+/**
+ * Limits the invitations to todo lists per user, not per IP: an invitation needs a login anyway. Every attempt counts,
+ * also those for unknown usernames, so the answer 404 cannot be used to probe many usernames. Has to run after the
+ * authentication.
+ */
+export const createInvitationRateLimiter = () =>
+  createRateLimiter({
+    windowMs: env.INVITATION_RATE_LIMIT_WINDOW_MS,
+    limit: env.INVITATION_RATE_LIMIT_MAX,
+    keyGenerator: (req) => `invite:${req.user!.id}`,
+    message: "Too many invitations, please try again later.",
+  });

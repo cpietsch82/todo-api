@@ -8,6 +8,8 @@ import { hasPermission } from "@/modules/authorization/permissions";
 import type { TypedRequest, TypedRequestBody } from "../express/Express";
 import { TodoListService } from "./TodoListService";
 import { TodoListMemberService } from "./TodoListMemberService";
+import { TodoListInvitationService } from "./TodoListInvitationService";
+import { createInvitationRateLimiter } from "@/middleware/rateLimit";
 import { MAX_LISTS_PER_USER } from "./limits";
 import {
   createTodoListSchema,
@@ -18,9 +20,13 @@ import {
 } from "./schema/todo-list.schema";
 import {
   changeMemberRoleSchema,
+  createInvitationSchema,
+  listInvitationParamsSchema,
   listMemberParamsSchema,
   transferListSchema,
   type ChangeMemberRoleBody,
+  type CreateInvitationBody,
+  type ListInvitationParams,
   type ListMemberParams,
   type TransferListBody,
 } from "./schema/sharing.schema";
@@ -33,12 +39,14 @@ export class TodoListAPI extends APIModule {
   private static instance: TodoListAPI;
   private todoListService: TodoListService;
   private memberService: TodoListMemberService;
+  private invitationService: TodoListInvitationService;
 
   constructor() {
     super("todo-list.api", "API Module for todo lists", "/todo-lists");
 
     this.todoListService = new TodoListService();
     this.memberService = new TodoListMemberService();
+    this.invitationService = new TodoListInvitationService();
 
     if (!TodoListAPI.instance) {
       TodoListAPI.instance = this;
@@ -101,6 +109,32 @@ export class TodoListAPI extends APIModule {
       validateBody(transferListSchema),
       typedHandler(this.transferList.bind(this)),
     );
+
+    // invitations: only the owner invites, sharing passes no rights on
+    this.router.get(
+      "/:listId/invitations",
+      byId,
+      requirePermissions("todo-lists:share"),
+      requireListRole("owner"),
+      this.getInvitations.bind(this),
+    );
+    this.router.post(
+      "/:listId/invitations",
+      byId,
+      requirePermissions("todo-lists:share"),
+      requireListRole("owner"),
+      // counts every attempt, also those for unknown usernames
+      createInvitationRateLimiter(),
+      validateBody(createInvitationSchema),
+      typedHandler(this.createInvitation.bind(this)),
+    );
+    this.router.delete(
+      "/:listId/invitations/:invitationId",
+      validateParams(listInvitationParamsSchema),
+      requirePermissions("todo-lists:share"),
+      requireListRole("owner"),
+      typedHandler(this.revokeInvitation.bind(this)),
+    );
   }
 
   private async getLists(req: Request, res: Response) {
@@ -154,6 +188,23 @@ export class TodoListAPI extends APIModule {
   private async changeMemberRole(req: TypedRequest<ListMemberParams, ChangeMemberRoleBody>, res: Response) {
     const list = req.todoList!;
     res.json(await this.memberService.changeRole(list.listId, req.params.userId, req.body.role, list.ownerId));
+  }
+
+  private async getInvitations(req: Request, res: Response) {
+    res.json(await this.invitationService.getOpenInvitationsOfList(req.todoList!.listId));
+  }
+
+  private async createInvitation(req: TypedRequestBody<CreateInvitationBody>, res: Response) {
+    const { listId, ownerId } = req.todoList!;
+    const { username, role } = req.body;
+    const invitation = await this.invitationService.createInvitation(listId, username, role, req.user!.id, ownerId);
+    res.status(201).json(invitation);
+  }
+
+  private async revokeInvitation(req: TypedRequest<ListInvitationParams>, res: Response) {
+    const invitation = await this.invitationService.revokeInvitation(req.todoList!.listId, req.params.invitationId);
+    if (!invitation) throw HttpError.notFound("Invitation not found");
+    res.json(invitation);
   }
 
   /** Hands the list over to a member; answers with the list as the requesting user sees it now. */
