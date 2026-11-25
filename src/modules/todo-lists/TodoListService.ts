@@ -97,7 +97,8 @@ export class TodoListService extends BaseModule {
     return list;
   }
 
-  async updateList(listId: string, updates: { name?: string; description?: string | null }): Promise<TodoList> {
+  /** @returns undefined when the list does not exist (anymore) */
+  async updateList(listId: string, updates: { name?: string; description?: string | null }): Promise<TodoList | undefined> {
     const [list] = await db
       .update(todoLists)
       .set({ ...updates, updatedAt: new Date() })

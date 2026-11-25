@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
 import request from "supertest";
 import type { Server } from "node:http";
 import { eq } from "drizzle-orm";
@@ -6,6 +6,7 @@ import { db } from "@/db";
 import { todos, type User } from "@/db/schema";
 import { todoListMembers, todoLists, type MemberRole, type TodoList } from "@modules/todo-lists/schema/todo-list.schema";
 import { TodoListAPI } from "@modules/todo-lists/TodoListAPI";
+import { TodoListService } from "@modules/todo-lists/TodoListService";
 import { MAX_LISTS_PER_USER } from "@modules/todo-lists/limits";
 import { createAuthHeader, generateTodo, generateUser, NON_EXISTENT_UUID } from "@tests/test.helpers";
 import { getTestServer } from "@tests/integration.setup";
@@ -173,6 +174,39 @@ describe("TodoListAPI", () => {
       const stored = await listById(list.listId);
       expect(stored.ownerId).toBe(owner.userId);
       expect(stored.name).toBe("Baumarkt");
+    });
+  });
+
+  describe("a list that changes between the role check and the handler", () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it("should answer PATCH with the summary of the list, like GET", async () => {
+      const list = await createList(owner.userId);
+      await addMember(list.listId, member.userId, "viewer");
+
+      const response = await request(server)
+        .patch(`/api/todo-lists/${list.listId}`)
+        .set(await createAuthHeader(owner))
+        .send({ updates: { name: "Baumarkt" } });
+
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({ name: "Baumarkt", myRole: "owner", todoCount: 0, memberCount: 1 });
+    });
+
+    it("should answer 404 when the list vanished before PATCH or DELETE", async () => {
+      const list = await createList(owner.userId);
+      const header = await createAuthHeader(owner);
+      // deleted by someone else after requireListRole found it
+      vi.spyOn(TodoListService.prototype, "updateList").mockResolvedValue(undefined);
+      vi.spyOn(TodoListService.prototype, "deleteList").mockResolvedValue(undefined);
+
+      const patched = await request(server).patch(`/api/todo-lists/${list.listId}`).set(header).send({ updates: { name: "X" } });
+      const deleted = await request(server).delete(`/api/todo-lists/${list.listId}`).set(header);
+
+      expect(patched.status).toBe(404);
+      expect(deleted.status).toBe(404);
     });
   });
 

@@ -90,11 +90,17 @@ export class TodoListAPI extends APIModule {
 
   private async updateList(req: TypedRequestBody<UpdateTodoListBody>, res: Response) {
     const { name, description } = req.body.updates;
-    res.json(await this.todoListService.updateList(req.todoList!.listId, { name, description }));
+    const list = await this.todoListService.updateList(req.todoList!.listId, { name, description });
+    // deleted after requireListRole found it
+    if (!list) throw HttpError.notFound();
+    res.json(await this.todoListService.getListSummary(list, req.listRole!));
   }
 
   private async deleteList(req: Request, res: Response) {
-    res.json(await this.todoListService.deleteList(req.todoList!.listId));
+    const list = await this.todoListService.deleteList(req.todoList!.listId);
+    // deleted by someone else after requireListRole found it
+    if (!list) throw HttpError.notFound();
+    res.json(list);
   }
 
   private async getTodosOfList(req: Request, res: Response) {
