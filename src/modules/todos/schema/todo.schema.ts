@@ -69,7 +69,7 @@ export const SelectTodoSchema = createSelectSchema(todos);
 export const createTodoSchema = z.object({
   todoRecord: InsertTodoSchema.omit({
     todoId: true,
-    userId: true, // TODO: wieder mit reinehmen, sobald User Modul fertig ist!
+    userId: true,
     createdAt: true,
     updatedAt: true,
     version: true,
