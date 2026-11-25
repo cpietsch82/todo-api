@@ -1,9 +1,9 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import request from "supertest";
-import type { Express } from "express";
+import type { Server } from "node:http";
 import { eq } from "drizzle-orm";
 import { AuthenticationAPI } from "../AuthenticationAPI";
-import { getTestApp } from "@tests/integration.setup";
+import { getTestServer } from "@tests/integration.setup";
 import { db } from "@/db";
 import { authentications, roles, users } from "@/db/schema";
 import { hashPassword } from "@/utils/passwords";
@@ -18,14 +18,14 @@ const PAYLOAD = {
   lastName: "Doe",
 };
 
-const register = (server: Express, body: object) => request(server).post("/api/auth/register").send(body);
+const register = (server: Server, body: object) => request(server).post("/api/auth/register").send(body);
 
 describe("Validation of the registration", () => {
-  let server: Express;
+  let server: Server;
 
   beforeAll(() => {
     new AuthenticationAPI();
-    server = getTestApp();
+    server = getTestServer();
   });
 
   describe("username", () => {

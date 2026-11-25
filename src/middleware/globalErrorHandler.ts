@@ -1,7 +1,13 @@
 import { logger, serializeError } from "@/utils/logger";
 import env from "../../env";
 import { HttpError } from "@/utils/HttpError";
-import { isForeignKeyViolation, isUniqueViolation } from "@/utils/dbErrors";
+import {
+  getPgConstraintName,
+  isCheckViolation,
+  isForeignKeyViolation,
+  isRetryableTransactionError,
+  isUniqueViolation,
+} from "@/utils/dbErrors";
 import { randomUUID } from "crypto";
 import { STATUS_CODES } from "http";
 import type { NextFunction, Request, Response } from "express";
@@ -9,6 +15,10 @@ import type { NextFunction, Request, Response } from "express";
 type ErrorWithStatus = Error & { status?: unknown; statusCode?: unknown; expose?: unknown };
 
 const FALLBACK_STATUS = 500;
+
+// Check constraints a concurrent request can violate although the request itself was valid; the client may retry.
+// Every other check violation is a bug the client cannot fix by retrying and stays a 500.
+const CONCURRENCY_CHECK_CONSTRAINTS = ["chk_todos_owner_or_list"];
 
 interface ResolvedError {
   status: number;
@@ -26,6 +36,12 @@ function resolveError(error: ErrorWithStatus): ResolvedError {
 
   if (isUniqueViolation(error)) return { status: 409, publicMessage: "Resource already exists" };
   if (isForeignKeyViolation(error)) return { status: 400, publicMessage: "Referenced resource does not exist" };
+  // a rule of the database refused a change that a concurrent request made invalid
+  if (isCheckViolation(error) && CONCURRENCY_CHECK_CONSTRAINTS.includes(getPgConstraintName(error) ?? "")) {
+    return { status: 409, publicMessage: "Conflict with the current state, please try again" };
+  }
+  // left after the one retry of withRetryOnDeadlock; still a 5xx (logged with error id), but the client may retry
+  if (isRetryableTransactionError(error)) return { status: 503, publicMessage: "The database is busy, please try again" };
 
   const rawStatus = error.status ?? error.statusCode;
   const status =

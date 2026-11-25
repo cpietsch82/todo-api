@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeAll, vi } from "vitest";
 import request from "supertest";
-import type { Express } from "express";
+import type { Server } from "node:http";
 import env from "../../../../env";
 import { AuthenticationAPI } from "../AuthenticationAPI";
-import { getTestApp } from "@tests/integration.setup";
+import { getTestServer } from "@tests/integration.setup";
 import { db } from "@/db";
 import { users, authentications } from "@/db/schema";
 import { hashPassword } from "@/utils/passwords";
@@ -15,7 +15,7 @@ const PAYLOAD = {
 };
 
 describe("AuthAPI rate limits", () => {
-  let server: Express;
+  let server: Server;
 
   beforeAll(() => {
     // the limiters read the limits when the routes are created
@@ -24,7 +24,7 @@ describe("AuthAPI rate limits", () => {
     vi.spyOn(env, "TOKEN_RATE_LIMIT_MAX", "get").mockReturnValue(2);
 
     new AuthenticationAPI();
-    server = getTestApp();
+    server = getTestServer();
   });
 
   it("should limit registrations per IP", async () => {

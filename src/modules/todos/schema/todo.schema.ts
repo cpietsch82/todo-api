@@ -1,8 +1,9 @@
-import { pgTable, uuid, varchar, text, timestamp, index, pgEnum } from "drizzle-orm/pg-core";
-import { relations } from "drizzle-orm";
+import { pgTable, uuid, varchar, text, timestamp, index, pgEnum, integer, check } from "drizzle-orm/pg-core";
+import { relations, sql } from "drizzle-orm";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 import { z } from "zod";
 import { users } from "@/modules/users/schema/user.schema";
+import { todoLists } from "@/modules/todo-lists/schema/todo-list.schema";
 
 // DB Schema
 export const todoStatusEnum = pgEnum("todo_status", ["in_progress", "finished", "declined", "not_ready", "blocked_by"]);
@@ -17,9 +18,12 @@ export const todos = pgTable(
     status: todoStatusEnum("status").default("not_ready"),
     severity: todoSeverityEnum("severity").default("medium"),
     tags: text("tags").array().default([]),
-    userId: uuid("user_id")
-      .notNull()
-      .references(() => users.userId, { onDelete: "cascade" }),
+    // the creator; null once the creator is deleted while the todo stays in a list of someone else
+    userId: uuid("user_id").references(() => users.userId, { onDelete: "set null" }),
+    // the list the todo belongs to; deleting a list gives its todos back to their creators
+    listId: uuid("list_id").references(() => todoLists.listId, { onDelete: "set null" }),
+    // increased with every change, for the detection of concurrent changes (not used yet)
+    version: integer("version").default(1).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
     // Unix-Timestamp in Sekunden (BigInt)
@@ -31,6 +35,9 @@ export const todos = pgTable(
     index("idx_todos_user_id").on(table.userId),
     index("idx_todos_status").on(table.status),
     index("idx_todos_tags").on(table.tags),
+    index("idx_todos_list_id").on(table.listId),
+    // a todo without creator and without list would belong to nobody
+    check("chk_todos_owner_or_list", sql`${table.userId} IS NOT NULL OR ${table.listId} IS NOT NULL`),
   ],
 );
 
@@ -62,9 +69,13 @@ export const SelectTodoSchema = createSelectSchema(todos);
 export const createTodoSchema = z.object({
   todoRecord: InsertTodoSchema.omit({
     todoId: true,
-    userId: true, // TODO: wieder mit reinehmen, sobald User Modul fertig ist!
+    userId: true,
     createdAt: true,
     updatedAt: true,
+    version: true,
+  }).extend({
+    // null or missing: the todo belongs to no list
+    listId: z.uuid("Invalid ListId").nullable().optional(),
   }),
 });
 
@@ -79,7 +90,13 @@ export const updateTodoSchema = z.object({
     userId: true,
     createdAt: true,
     updatedAt: true,
-  }).partial(),
+    version: true,
+  })
+    .extend({
+      // null takes the todo out of its list
+      listId: z.uuid("Invalid ListId").nullable(),
+    })
+    .partial(),
 });
 
 // Schemas für spezielle Aktionen

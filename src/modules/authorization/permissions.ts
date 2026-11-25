@@ -29,6 +29,11 @@ export type Permission =
   | "todo-comments:create"
   | "todo-comments:update"
   | "todo-comments:delete"
+  | "todo-lists:read"
+  | "todo-lists:create"
+  | "todo-lists:update"
+  | "todo-lists:delete"
+  | "todo-lists:share"
   | "users:read"
   | "users:list"
   | "users:update"
@@ -43,6 +48,11 @@ const USER_PERMISSIONS: readonly Permission[] = [
   "todo-comments:create",
   "todo-comments:update",
   "todo-comments:delete",
+  "todo-lists:read",
+  "todo-lists:create",
+  "todo-lists:update",
+  "todo-lists:delete",
+  "todo-lists:share",
   "users:read",
   "users:update",
   "users:delete",

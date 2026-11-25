@@ -5,7 +5,7 @@ import { ContainerReporter } from "@modules/updater/ContainerReporter";
 import { DockerCompose } from "@modules/updater/DockerCompose";
 import { FakeDocker } from "@modules/updater/test/FakeDocker";
 import request from "supertest";
-import type { Express } from "express";
+import type { Server } from "node:http";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { AdminAPI } from "@modules/admin/AdminAPI";
@@ -15,14 +15,14 @@ import { VersionService } from "@modules/express/VersionService";
 import AuthorizationService from "@modules/authorization/AuthorizationService";
 import { permissions, rolePermissions, roles, userRoles } from "@modules/authorization/schema/authorization.schema";
 import { createAuthHeader, generateUser, NON_EXISTENT_UUID, UUID_REGEX } from "@tests/test.helpers";
-import { getTestApp } from "@tests/integration.setup";
+import { getTestServer } from "@tests/integration.setup";
 import type { User } from "@/db/schema";
 import type { UserRole } from "@modules/authorization/permissions";
 
 describe("AdminAPI", () => {
   const authorizationService = new AuthorizationService();
   const deploymentService = new DeploymentService();
-  let server: Express;
+  let server: Server;
   let testUser: User;
 
   /** gives the user the roles in the database and returns a matching auth header */
@@ -40,7 +40,7 @@ describe("AdminAPI", () => {
 
   beforeAll(async () => {
     new AdminAPI();
-    server = getTestApp();
+    server = getTestServer();
 
     // a role that may only look at the status, to check that every operation requires its own permission
     await db.insert(roles).values({ name: "observer", description: "test role" }).onConflictDoNothing();

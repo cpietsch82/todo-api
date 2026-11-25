@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 import request from "supertest";
-import type { Express } from "express";
+import type { Server } from "node:http";
 import env from "../../../../env";
 import { AuthenticationAPI } from "../AuthenticationAPI";
-import { getTestApp } from "@tests/integration.setup";
+import { getTestServer } from "@tests/integration.setup";
 import { db } from "@/db";
 import { users, authentications } from "@/db/schema";
 import { hashPassword } from "@/utils/passwords";
@@ -15,18 +15,18 @@ async function createUser(email: string, username: string) {
   await db.insert(authentications).values({ userId: user.userId, password: await hashPassword(PASSWORD) });
 }
 
-const login = (server: Express, email: string, password: string) =>
+const login = (server: Server, email: string, password: string) =>
   request(server).post("/api/auth/login").send({ email, password });
 
 describe("AuthAPI failed logins per account", () => {
-  let server: Express;
+  let server: Server;
 
   beforeAll(() => {
     // the limiters read the limits when the routes are created; the limit per IP stays high (vitest.config.ts)
     vi.spyOn(env, "LOGIN_ACCOUNT_RATE_LIMIT_MAX", "get").mockReturnValue(3);
 
     new AuthenticationAPI();
-    server = getTestApp();
+    server = getTestServer();
   });
 
   beforeEach(async () => {

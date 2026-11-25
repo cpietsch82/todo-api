@@ -1,11 +1,21 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import type { Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import express from "express";
 import request from "supertest";
 import { configureTrustProxy } from "@modules/express/Express";
 import { createRateLimiter } from "@/middleware/rateLimit";
+import { listenOnLoopback } from "@tests/supertest.loopback";
 
-/** small app with the response helper the limiter uses and a login like route */
-function createApp(options: Parameters<typeof createRateLimiter>[0], trustedProxies = 0) {
+// every server a test starts, closed after the test
+const servers: Server[] = [];
+
+afterEach(async () => {
+  await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve) => server.close(() => resolve()))));
+});
+
+/** small app with the response helper the limiter uses and a login like route, started on the IPv4 loopback */
+async function createApp(options: Parameters<typeof createRateLimiter>[0], trustedProxies = 0): Promise<Server> {
   const app = express();
   configureTrustProxy(app, trustedProxies);
   app.use(express.json());
@@ -21,14 +31,25 @@ function createApp(options: Parameters<typeof createRateLimiter>[0], trustedProx
     res.send(req.ip);
   });
 
-  return app;
+  const server = await listenOnLoopback(app);
+  servers.push(server);
+  return server;
 }
 
-describe("createRateLimiter", () => {
-  let app: express.Express;
+describe("test server of the rate limit tests", () => {
+  it("should already listen on the IPv4 loopback, where supertest sends its requests", async () => {
+    const server = await createApp({ windowMs: 60_000, limit: 3 });
 
-  beforeEach(() => {
-    app = createApp({ windowMs: 60_000, limit: 3, skipSuccessfulRequests: true, message: "slow down" });
+    expect(server.listening).toBe(true);
+    expect((server.address() as AddressInfo).address).toBe("127.0.0.1");
+  });
+});
+
+describe("createRateLimiter", () => {
+  let app: Server;
+
+  beforeEach(async () => {
+    app = await createApp({ windowMs: 60_000, limit: 3, skipSuccessfulRequests: true, message: "slow down" });
   });
 
   it("should allow requests up to the limit and answer with 429 afterwards", async () => {
@@ -59,7 +80,7 @@ describe("createRateLimiter", () => {
   });
 
   it("should count every request when skipSuccessfulRequests is not set", async () => {
-    const countingApp = createApp({ windowMs: 60_000, limit: 2 });
+    const countingApp = await createApp({ windowMs: 60_000, limit: 2 });
 
     await request(countingApp).post("/login").send({});
     await request(countingApp).post("/login").send({});
@@ -75,7 +96,7 @@ describe("createRateLimiter", () => {
 
   describe("client ip behind a proxy", () => {
     it("should ignore X-Forwarded-For when no proxy is trusted", async () => {
-      const response = await request(createApp({ windowMs: 60_000, limit: 3 }, 0))
+      const response = await request(await createApp({ windowMs: 60_000, limit: 3 }, 0))
         .get("/ip")
         .set("X-Forwarded-For", "203.0.113.7");
 
@@ -83,7 +104,7 @@ describe("createRateLimiter", () => {
     });
 
     it("should use X-Forwarded-For when one proxy is trusted", async () => {
-      const response = await request(createApp({ windowMs: 60_000, limit: 3 }, 1))
+      const response = await request(await createApp({ windowMs: 60_000, limit: 3 }, 1))
         .get("/ip")
         .set("X-Forwarded-For", "203.0.113.7");
 
@@ -91,7 +112,7 @@ describe("createRateLimiter", () => {
     });
 
     it("should count each client behind a trusted proxy separately", async () => {
-      const proxied = createApp({ windowMs: 60_000, limit: 1, skipSuccessfulRequests: true }, 1);
+      const proxied = await createApp({ windowMs: 60_000, limit: 1, skipSuccessfulRequests: true }, 1);
 
       await request(proxied).post("/login").set("X-Forwarded-For", "203.0.113.1").send({ fail: true });
       const sameClient = await request(proxied).post("/login").set("X-Forwarded-For", "203.0.113.1").send({ fail: true });
@@ -102,7 +123,7 @@ describe("createRateLimiter", () => {
     });
 
     it("should count by the given key instead of the IP, so changing the IP does not help", async () => {
-      const perAccount = createApp(
+      const perAccount = await createApp(
         { windowMs: 60_000, limit: 1, skipSuccessfulRequests: true, keyGenerator: (req) => String(req.body.account) },
         1,
       );
@@ -122,7 +143,7 @@ describe("createRateLimiter", () => {
     });
 
     it("should not trust a forged header when no proxy is trusted", async () => {
-      const direct = createApp({ windowMs: 60_000, limit: 1, skipSuccessfulRequests: true }, 0);
+      const direct = await createApp({ windowMs: 60_000, limit: 1, skipSuccessfulRequests: true }, 0);
 
       await request(direct).post("/login").set("X-Forwarded-For", "203.0.113.1").send({ fail: true });
       const forged = await request(direct).post("/login").set("X-Forwarded-For", "203.0.113.2").send({ fail: true });

@@ -2,8 +2,25 @@ import type { NextFunction, Request, RequestHandler, Response } from "express";
 import { hasAnyPermission, hasEveryPermission, hasPermission, type Permission } from "@/modules/authorization/permissions";
 import AuthorizationService from "@/modules/authorization/AuthorizationService";
 import { TodoCommentService } from "@/modules/todos/TodoCommentService";
-import { TodoService } from "@/modules/todos/TodoService";
+import { TodoService, type AccessingUser } from "@/modules/todos/TodoService";
+import type { Todo } from "@/modules/todos/schema/todo.schema";
 import UserService from "@/modules/users/UserService";
+import { TodoListService } from "@/modules/todo-lists/TodoListService";
+import { hasListRole } from "@/modules/todo-lists/listRoles";
+import type { ListRole, TodoList } from "@/modules/todo-lists/schema/todo-list.schema";
+
+declare global {
+  namespace Express {
+    interface Request {
+      /** set by requireListRole: the list of the route */
+      todoList?: TodoList;
+      /** set by requireListRole: the role of the current user in that list */
+      listRole?: ListRole;
+      /** set by requireTodoAccess, requireTodoEditAccess and requireTodoDeleteAccess: the todo of the route */
+      todo?: Todo;
+    }
+  }
+}
 
 /**
  * Returns the currently authenticated user or sends a 401 response when no
@@ -148,29 +165,16 @@ function createOwnershipMiddleware(
   };
 }
 
-/**
- * Requires ownership of the referenced todo or admin privileges.
- */
-export function requireTodoOwnership(todoService: TodoService = new TodoService()): RequestHandler {
-  return createOwnershipMiddleware(
-    async (req) => {
-      const todo = await todoService.getTodoById(req.params.todoId as string);
-      return todo?.userId;
-    },
-    "You are not allowed to access this todo",
-  );
-}
+type TodoAccessCheck = (todoService: TodoService, todo: Todo, user: AccessingUser) => Promise<boolean>;
 
 /**
- * Requires access to a todo: the user may see it (TodoService.canAccessTodo). Unlike the ownership checks this is
- * not limited to the creator once todos can be shared, so it guards everything that only needs to see the todo
- * (reading it, taking part in its discussion).
- * 404 when the todo does not exist (also for admins), 403 when the user may not see it.
- * @param resolveTodoId where the todo id is, by default the route parameter todoId; must run after the validation
+ * Loads the todo of the request and checks the access with one of the rules of the TodoService.
+ * 404 when the todo does not exist (also for admins), 403 when the rule does not allow the access.
  */
-export function requireTodoAccess(
-  resolveTodoId: (req: Request) => string | undefined = (req) => req.params.todoId as string | undefined,
-  todoService: TodoService = new TodoService(),
+function createTodoAccessCheck(
+  isAllowed: TodoAccessCheck,
+  resolveTodoId: (req: Request) => string | undefined,
+  todoService: TodoService,
 ): RequestHandler {
   return async (req: Request, res: Response, next: NextFunction) => {
     const user = getAuthenticatedUser(req, res);
@@ -183,13 +187,40 @@ export function requireTodoAccess(
       return;
     }
 
-    if (!(await todoService.canAccessTodo(todo, user))) {
+    if (!(await isAllowed(todoService, todo, user))) {
       res.respondAuthorizationInsufficient("You are not allowed to access this todo", true);
       return;
     }
 
+    // the handler uses it instead of loading the todo again
+    req.todo = todo;
     next();
   };
+}
+
+const todoIdFromParams = (req: Request) => req.params.todoId as string | undefined;
+
+/**
+ * Requires access to a todo: the user may see it (TodoService.canAccessTodo), as creator of a todo without list or
+ * with any role in the list of the todo. Guards everything that only needs to see the todo (reading it, taking part
+ * in its discussion).
+ * @param resolveTodoId where the todo id is, by default the route parameter todoId; must run after the validation
+ */
+export function requireTodoAccess(
+  resolveTodoId: (req: Request) => string | undefined = todoIdFromParams,
+  todoService: TodoService = new TodoService(),
+): RequestHandler {
+  return createTodoAccessCheck((service, todo, user) => service.canAccessTodo(todo, user), resolveTodoId, todoService);
+}
+
+/** Requires the right to change the todo of the route (TodoService.canEditTodo). */
+export function requireTodoEditAccess(todoService: TodoService = new TodoService()): RequestHandler {
+  return createTodoAccessCheck((service, todo, user) => service.canEditTodo(todo, user), todoIdFromParams, todoService);
+}
+
+/** Requires the right to delete the todo of the route (TodoService.canDeleteTodo). */
+export function requireTodoDeleteAccess(todoService: TodoService = new TodoService()): RequestHandler {
+  return createTodoAccessCheck((service, todo, user) => service.canDeleteTodo(todo, user), todoIdFromParams, todoService);
 }
 
 /**
@@ -218,4 +249,39 @@ export function requireUserOwnership(userService: UserService = new UserService(
     },
     "You are not allowed to access this user",
   );
+}
+
+/**
+ * Requires at least the given role in the list of the route (owner > editor > viewer, admins count as owner). The
+ * role is read from the database on every request, so a removed member loses the access with the next request.
+ * 404 when the list does not exist, 403 when the role is too low. Passes the list and the role on as req.todoList and
+ * req.listRole, so the handler does not need to load them again.
+ * @param resolveListId where the list id is, by default the route parameter listId; must run after the validation
+ */
+export function requireListRole(
+  minimum: ListRole,
+  resolveListId: (req: Request) => string | undefined = (req) => req.params.listId as string | undefined,
+  todoListService: TodoListService = new TodoListService(),
+): RequestHandler {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    const user = getAuthenticatedUser(req, res);
+    if (!user) return;
+
+    const listId = resolveListId(req);
+    const list = listId ? await todoListService.getListById(listId) : undefined;
+    if (!list) {
+      res.respondNotFound();
+      return;
+    }
+
+    const role = await todoListService.getListRole(list, user);
+    if (!hasListRole(role, minimum)) {
+      res.respondAuthorizationInsufficient(`List role ${minimum} required`, true);
+      return;
+    }
+
+    req.todoList = list;
+    req.listRole = role;
+    next();
+  };
 }
