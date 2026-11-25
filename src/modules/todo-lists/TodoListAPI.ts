@@ -4,8 +4,10 @@ import { validateBody, validateParams } from "@/middleware/validate";
 import { requireListRole, requirePermissions } from "@/middleware/permissions";
 import { typedHandler } from "@/utils/typedHandler";
 import { HttpError } from "@/utils/HttpError";
-import type { TypedRequestBody } from "../express/Express";
+import { hasPermission } from "@/modules/authorization/permissions";
+import type { TypedRequest, TypedRequestBody } from "../express/Express";
 import { TodoListService } from "./TodoListService";
+import { TodoListMemberService } from "./TodoListMemberService";
 import { MAX_LISTS_PER_USER } from "./limits";
 import {
   createTodoListSchema,
@@ -14,6 +16,12 @@ import {
   type CreateTodoListBody,
   type UpdateTodoListBody,
 } from "./schema/todo-list.schema";
+import {
+  changeMemberRoleSchema,
+  listMemberParamsSchema,
+  type ChangeMemberRoleBody,
+  type ListMemberParams,
+} from "./schema/sharing.schema";
 
 /**
  * Lists of todos. Who may do what in a list follows from the role in it (requireListRole); the permissions of the
@@ -22,11 +30,13 @@ import {
 export class TodoListAPI extends APIModule {
   private static instance: TodoListAPI;
   private todoListService: TodoListService;
+  private memberService: TodoListMemberService;
 
   constructor() {
     super("todo-list.api", "API Module for todo lists", "/todo-lists");
 
     this.todoListService = new TodoListService();
+    this.memberService = new TodoListMemberService();
 
     if (!TodoListAPI.instance) {
       TodoListAPI.instance = this;
@@ -67,6 +77,20 @@ export class TodoListAPI extends APIModule {
       requireListRole("viewer"),
       this.getTodosOfList.bind(this),
     );
+
+    // members: every role sees them, the owner changes them, members may leave
+    const byMember = validateParams(listMemberParamsSchema);
+    this.router.get("/:listId/members", byId, requirePermissions("todo-lists:read"), requireListRole("viewer"), this.getMembers.bind(this));
+    this.router.patch(
+      "/:listId/members/:userId",
+      byMember,
+      requirePermissions("todo-lists:share"),
+      requireListRole("owner"),
+      validateBody(changeMemberRoleSchema),
+      typedHandler(this.changeMemberRole.bind(this)),
+    );
+    // leaving needs no permission beyond being in the list, removing others is checked in the handler
+    this.router.delete("/:listId/members/:userId", byMember, requireListRole("viewer"), typedHandler(this.removeMember.bind(this)));
   }
 
   private async getLists(req: Request, res: Response) {
@@ -111,6 +135,31 @@ export class TodoListAPI extends APIModule {
 
   private async getTodosOfList(req: Request, res: Response) {
     res.json(await this.todoListService.getTodosOfList(req.todoList!.listId));
+  }
+
+  private async getMembers(req: Request, res: Response) {
+    res.json(await this.memberService.getMembers(req.todoList!));
+  }
+
+  private async changeMemberRole(req: TypedRequest<ListMemberParams, ChangeMemberRoleBody>, res: Response) {
+    const list = req.todoList!;
+    res.json(await this.memberService.changeRole(list.listId, req.params.userId, req.body.role, list.ownerId));
+  }
+
+  /** A member leaves the list, or the owner removes someone else. */
+  private async removeMember(req: TypedRequest<ListMemberParams>, res: Response) {
+    const list = req.todoList!;
+    const { userId } = req.params;
+
+    if (userId === req.user!.id) {
+      res.json(await this.memberService.removeMember(list.listId, userId));
+      return;
+    }
+
+    if (req.listRole !== "owner" || !hasPermission(req.user!.permissions, "todo-lists:share")) {
+      throw HttpError.forbidden("Removing others needs the owner role");
+    }
+    res.json(await this.memberService.removeMember(list.listId, userId, list.ownerId));
   }
 }
 
