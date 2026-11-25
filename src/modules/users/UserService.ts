@@ -51,11 +51,19 @@ export class UserService extends BaseModule {
   async deleteUser(userId: string): Promise<User> {
     return withRetryOnDeadlock(() =>
       db.transaction(async (tx) => {
-        // lock the own todos first (always ordered by id), see TodoListService.deleteList: a concurrent deletion of a
-        // list waits for this transaction or this one for it, and the statements below see its result
+        // lock order of the spec (7.1): the user row, the own lists ordered by id, then the own todos ordered by id.
+        // New todos and lists of the user wait for the user row (their foreign key check) and fail once the user is
+        // gone; a concurrent deletion of a list waits for this transaction or this one for it, and the statements
+        // below see its result
+        await tx.select({ userId: users.userId }).from(users).where(eq(users.userId, userId)).for("update");
+        const ownLists = await tx
+          .select({ listId: todoLists.listId })
+          .from(todoLists)
+          .where(eq(todoLists.ownerId, userId))
+          .orderBy(asc(todoLists.listId))
+          .for("update");
         await tx.select({ todoId: todos.todoId }).from(todos).where(eq(todos.userId, userId)).orderBy(asc(todos.todoId)).for("update");
 
-        const ownLists = await tx.select({ listId: todoLists.listId }).from(todoLists).where(eq(todoLists.ownerId, userId));
         for (const { listId } of ownLists) await new TodoListService().deleteList(listId, tx);
 
         await tx.delete(todos).where(and(eq(todos.userId, userId), isNull(todos.listId)));

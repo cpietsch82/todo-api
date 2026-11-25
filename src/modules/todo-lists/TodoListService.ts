@@ -117,8 +117,12 @@ export class TodoListService extends BaseModule {
     // an own transaction is retried after a deadlock; a given one belongs to the caller, who decides on retrying
     if (!tx) return withRetryOnDeadlock(() => db.transaction((ownTx) => this.deleteList(listId, ownTx)));
 
-    // lock the todos first (always ordered by id): a concurrent deletion of a creator waits for this transaction, or
-    // this one for it, and the statements below see its result (READ COMMITTED reads again per statement)
+    // lock order of the spec (7.1): the list row first, then its todos ordered by id. A todo moved or added into the
+    // list waits for the list row (its foreign key check) and fails cleanly once the list is gone; a concurrent
+    // deletion of a creator waits for this transaction, or this one for it, and the statements below see its result
+    // (READ COMMITTED reads again per statement)
+    const [locked] = await tx.select({ listId: todoLists.listId }).from(todoLists).where(eq(todoLists.listId, listId)).for("update");
+    if (!locked) return undefined;
     await tx.select({ todoId: todos.todoId }).from(todos).where(eq(todos.listId, listId)).orderBy(asc(todos.todoId)).for("update");
 
     await tx.delete(todos).where(and(eq(todos.listId, listId), isNull(todos.userId)));
