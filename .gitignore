@@ -13,3 +13,5 @@ TODOS.txt
 .DS_Store
 postgres_data
 api_logs
+
+docs/
