@@ -7,6 +7,8 @@ import { todos, users, type User } from "@/db/schema";
 import { todoListMembers, todoLists, type MemberRole, type TodoList } from "@modules/todo-lists/schema/todo-list.schema";
 import { MAX_TODOS_PER_LIST } from "@modules/todo-lists/limits";
 import { TodoAPI } from "@modules/todos/TodoAPI";
+import { TodoCommentAPI } from "@modules/todos/TodoCommentAPI";
+import { todoComments } from "@modules/todos/schema/todo.comment.schema";
 import { createAuthHeader, generateTodo, generateUser, NON_EXISTENT_UUID } from "@tests/test.helpers";
 import { getTestServer } from "@tests/integration.setup";
 
@@ -34,6 +36,7 @@ describe("TodoAPI with lists", () => {
 
   beforeAll(() => {
     new TodoAPI();
+    new TodoCommentAPI();
     server = getTestServer();
   });
 
@@ -113,6 +116,37 @@ describe("TodoAPI with lists", () => {
   });
 
   describe("PATCH /api/todos/:todoId moving between lists", () => {
+    it("should let the owner of both lists move a todo from one list into the other", async () => {
+      const second = await createList(owner.userId, "Baumarkt");
+      const todo = await generateTodo(owner.userId, { listId: list.listId });
+
+      const response = await patch(owner, todo.todoId, { listId: second.listId });
+
+      expect(response.status).toBe(201);
+      expect((await todoById(todo.todoId)).listId).toBe(second.listId);
+    });
+
+    it("should not let an editor move an own todo into a list where they are only viewer", async () => {
+      const target = await createList(stranger.userId, "Fremd");
+      await addMember(target.listId, editor.userId, "viewer");
+      const todo = await generateTodo(editor.userId, { listId: list.listId });
+
+      const response = await patch(editor, todo.todoId, { listId: target.listId, title: "Moved away" });
+
+      expect(response.status).toBe(403);
+      expect(await todoById(todo.todoId)).toMatchObject({ listId: list.listId, title: "Test Todo" });
+    });
+
+    it("should not let an editor move a todo someone else created into an own list", async () => {
+      const own = await createList(editor.userId, "Eigene");
+      const todo = await generateTodo(owner.userId, { listId: list.listId });
+
+      const response = await patch(editor, todo.todoId, { listId: own.listId });
+
+      expect(response.status).toBe(403);
+      expect((await todoById(todo.todoId)).listId).toBe(list.listId);
+    });
+
     it("should move an own private todo into an own list", async () => {
       const todo = await generateTodo(owner.userId);
 
@@ -221,6 +255,32 @@ describe("TodoAPI with lists", () => {
       expect((await request(server).get(`/api/todos/${todo.todoId}`).set(await createAuthHeader(stranger))).status).toBe(
         403,
       );
+    });
+  });
+
+  describe("comments on todos of a list", () => {
+    const comment = async (user: User, todoId: string) =>
+      request(server)
+        .post("/api/todo-comments")
+        .set(await createAuthHeader(user))
+        .send({ commentRecord: { todoId, comment: "Brauchen wir Hafermilch?" } });
+
+    it("should let a viewer of the list comment on its todos", async () => {
+      const todo = await generateTodo(owner.userId, { listId: list.listId });
+
+      const response = await comment(viewer, todo.todoId);
+
+      expect(response.status).toBe(201);
+      expect(response.body).toMatchObject({ todoId: todo.todoId, userId: viewer.userId });
+    });
+
+    it("should not let a stranger or a removed member comment", async () => {
+      const todo = await generateTodo(owner.userId, { listId: list.listId });
+      await db.delete(todoListMembers).where(eq(todoListMembers.userId, viewer.userId));
+
+      expect((await comment(stranger, todo.todoId)).status).toBe(403);
+      expect((await comment(viewer, todo.todoId)).status).toBe(403);
+      expect(await db.select().from(todoComments)).toHaveLength(0);
     });
   });
 
