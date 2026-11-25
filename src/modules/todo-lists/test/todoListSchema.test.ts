@@ -11,6 +11,7 @@ import {
 } from "@modules/todo-lists/schema/todo-list.schema";
 import { createTodoSchema, updateTodoSchema } from "@modules/todos/schema/todo.schema";
 import { generateTodo, generateUser } from "@tests/test.helpers";
+import { getPgConstraintName } from "@/utils/dbErrors";
 // registers the database cleanup hooks
 import "@tests/integration.setup";
 
@@ -46,6 +47,15 @@ describe("todo list schema", () => {
   describe("constraints", () => {
     it("should reject a todo without creator and without list (chk_todos_owner_or_list)", async () => {
       await expect(db.insert(todos).values({ title: "Orphan todo", userId: null, listId: null })).rejects.toThrow();
+    });
+
+    it("should name the violated constraint in the error of the driver", async () => {
+      const error = await db
+        .insert(todos)
+        .values({ title: "Orphan todo", userId: null, listId: null })
+        .catch((caught: unknown) => caught);
+
+      expect(getPgConstraintName(error)).toBe("chk_todos_owner_or_list");
     });
 
     it("should detach the todos of a deleted list", async () => {

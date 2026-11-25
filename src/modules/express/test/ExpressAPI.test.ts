@@ -88,7 +88,17 @@ describe("ExpressAPI", () => {
     });
     open.get("/throw-check-violation", () => {
       throw Object.assign(new Error("Failed query: update todos ... params: secret@mail.com"), {
-        cause: Object.assign(new Error("violates check constraint"), { code: "23514" }),
+        cause: Object.assign(new Error("violates check constraint"), { code: "23514", constraint: "chk_todos_owner_or_list" }),
+      });
+    });
+    open.get("/throw-other-check-violation", () => {
+      throw Object.assign(new Error("Failed query: insert into users ..."), {
+        cause: Object.assign(new Error("violates check constraint"), { code: "23514", constraint_name: "chk_users_email_lowercase" }),
+      });
+    });
+    open.get("/throw-deadlock", () => {
+      throw Object.assign(new Error("Failed query: delete from todo_lists ..."), {
+        cause: Object.assign(new Error("deadlock detected"), { code: "40P01" }),
       });
     });
     open.get("/throw-foreign-key-violation", () => {
@@ -456,6 +466,21 @@ describe("ExpressAPI", () => {
       expect(response.status).toBe(409);
       expect(response.text).toBe("Conflict with the current state, please try again");
       expect(response.text).not.toContain("secret@mail.com");
+    });
+
+    it("should treat any other check violation as an internal error, a bug the client cannot fix by retrying", async () => {
+      const response = await request(server).get("/api/express-test/throw-other-check-violation");
+
+      expect(response.status).toBe(500);
+      expect(response.headers["x-error-id"]).toMatch(UUID_REGEX);
+    });
+
+    it("should answer a deadlock that is left after the retry with 503, so the client tries again", async () => {
+      const response = await request(server).get("/api/express-test/throw-deadlock");
+
+      expect(response.status).toBe(503);
+      expect(response.text).toBe("The database is busy, please try again");
+      expect(response.headers["x-error-id"]).toMatch(UUID_REGEX);
     });
 
     it("should map a foreign key violation to 400 without leaking the query", async () => {

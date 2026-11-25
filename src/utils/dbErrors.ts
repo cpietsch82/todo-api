@@ -27,6 +27,26 @@ export const isCheckViolation = (error: unknown) => getPgErrorCode(error) === PG
 
 const RETRYABLE_CODES = [PG_DEADLOCK_DETECTED, PG_SERIALIZATION_FAILURE];
 
+/** A deadlock or a serialization failure: postgres aborted the transaction, running it again may succeed. */
+export const isRetryableTransactionError = (error: unknown) => RETRYABLE_CODES.includes(getPgErrorCode(error) ?? "");
+
+/**
+ * Returns the name of the constraint a postgres error is about (postgres-js calls it constraint_name, PGlite
+ * constraint), searching the cause chain like getPgErrorCode.
+ */
+export function getPgConstraintName(error: unknown): string | undefined {
+  let current: unknown = error;
+
+  for (let depth = 0; depth < 5 && current && typeof current === "object"; depth++) {
+    const { constraint_name: constraintName, constraint } = current as { constraint_name?: unknown; constraint?: unknown };
+    const name = constraintName ?? constraint;
+    if (typeof name === "string" && name.length > 0) return name;
+    current = (current as { cause?: unknown }).cause;
+  }
+
+  return undefined;
+}
+
 /**
  * Runs a transaction and runs it once more when postgres aborted it because of a deadlock or a serialization failure.
  * Postgres resolves a deadlock by aborting one of the transactions; running it again usually succeeds, because the
@@ -37,7 +57,7 @@ export async function withRetryOnDeadlock<T>(run: () => Promise<T>): Promise<T> 
   try {
     return await run();
   } catch (error) {
-    if (!RETRYABLE_CODES.includes(getPgErrorCode(error) ?? "")) throw error;
+    if (!isRetryableTransactionError(error)) throw error;
     return run();
   }
 }
