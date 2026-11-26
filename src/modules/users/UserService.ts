@@ -6,12 +6,15 @@ import { todos } from "@/modules/todos/schema/todo.schema";
 import { todoLists } from "@/modules/todo-lists/schema/todo-list.schema";
 import { TodoListService } from "@/modules/todo-lists/TodoListService";
 import { withRetryOnDeadlock } from "@/utils/dbErrors";
+import { resolveModule } from "@modules/core/resolveModule";
 
 export class UserService extends BaseModule {
   public static instance: UserService;
+  protected todoListService: TodoListService;
 
   constructor() {
     super("user.service", "Business logic for User management");
+    this.todoListService = resolveModule(TodoListService);
 
     if (!UserService.instance) {
       UserService.instance = this;
@@ -65,7 +68,7 @@ export class UserService extends BaseModule {
           .for("update");
         await tx.select({ todoId: todos.todoId }).from(todos).where(eq(todos.userId, userId)).orderBy(asc(todos.todoId)).for("update");
 
-        for (const { listId } of ownLists) await new TodoListService().deleteList(listId, tx);
+        for (const { listId } of ownLists) await this.todoListService.deleteList(listId, tx);
 
         await tx.delete(todos).where(and(eq(todos.userId, userId), isNull(todos.listId)));
         const [user] = await tx.delete(users).where(eq(users.userId, userId)).returning();

@@ -11,6 +11,7 @@ import {
   createRegisterRateLimiter,
   createTokenRateLimiter,
 } from "@/middleware/rateLimit";
+import { resolveModule } from "@modules/core/resolveModule";
 
 export class AuthenticationAPI extends APIModule {
   public static instance: AuthenticationAPI;
@@ -20,9 +21,10 @@ export class AuthenticationAPI extends APIModule {
   constructor() {
     super("authentication.api", "API Module for user authentication operations", "/auth", true);
 
-    this.authenticationService = new AuthenticationService();
+    this.authenticationService = resolveModule(AuthenticationService);
+    this.tokenService = resolveModule(TokenService);
+
     if (!AuthenticationAPI.instance) AuthenticationAPI.instance = this;
-    this.tokenService = new TokenService();
 
     return AuthenticationAPI.instance;
   }

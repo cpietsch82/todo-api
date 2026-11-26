@@ -8,6 +8,7 @@ import type { TypedRequestParams } from "../express/Express";
 import { TodoListService } from "./TodoListService";
 import { TodoListInvitationService } from "./TodoListInvitationService";
 import { invitationByIdSchema, type InvitationByIdParams } from "./schema/sharing.schema";
+import { resolveModule } from "@modules/core/resolveModule";
 
 /**
  * The invitations to lists as the invited user sees them: the own open ones, accepting and declining them. Only the
@@ -21,8 +22,8 @@ export class TodoListInvitationAPI extends APIModule {
   constructor() {
     super("todo-list-invitation.api", "API Module for the own invitations to todo lists", "/todo-list-invitations");
 
-    this.invitationService = new TodoListInvitationService();
-    this.todoListService = new TodoListService();
+    this.invitationService = resolveModule(TodoListInvitationService);
+    this.todoListService = resolveModule(TodoListService);
 
     if (!TodoListInvitationAPI.instance) {
       TodoListInvitationAPI.instance = this;

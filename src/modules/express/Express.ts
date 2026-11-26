@@ -14,6 +14,7 @@ import { additionalRequestDetailsForTesting } from "@/middleware/additionalReque
 import { globalErrorHandler } from "@/middleware/globalErrorHandler";
 import TokenService from "../authentication/TokenService";
 import { requireAuthentication } from "@/middleware/permissions";
+import { resolveModule } from "@modules/core/resolveModule";
 // import https from "https";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
@@ -147,8 +148,8 @@ export class ExpressAPI extends BaseModule {
     this.router = express.Router();
     this.preAuthRouter = express.Router();
 
-    this.tokenService = new TokenService();
-    this.versionService = new VersionService();
+    this.tokenService = resolveModule(TokenService);
+    this.versionService = resolveModule(VersionService);
 
     this.setupMiddleware();
 
