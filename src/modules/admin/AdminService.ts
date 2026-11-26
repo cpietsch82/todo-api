@@ -3,6 +3,7 @@ import { users, type User } from "@/modules/users/schema/user.schema";
 import { AuthorizationService, type RoleDefinition } from "@/modules/authorization/AuthorizationService";
 import type { AuthorizationClaims, Permission, RoleName } from "@/modules/authorization/permissions";
 import { UserService } from "../users/UserService";
+import { resolveModule } from "@modules/core/resolveModule";
 
 /** A user as the admin area shows it: the profile plus the roles and the permissions that follow from them. */
 export interface AdminUser {
@@ -50,8 +51,8 @@ export class AdminService extends BaseModule {
 
   constructor() {
     super("admin.service", "Business logic for administrative tasks");
-    this.authorizationService = new AuthorizationService();
-    this.userService = new UserService();
+    this.authorizationService = resolveModule(AuthorizationService);
+    this.userService = resolveModule(UserService);
 
     if (!AdminService.instance) {
       AdminService.instance = this;

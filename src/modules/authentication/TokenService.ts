@@ -9,6 +9,7 @@ import AuthorizationService from "../authorization/AuthorizationService";
 import { db } from "@/db";
 import { and, desc, eq, inArray, isNull, lt, or } from "drizzle-orm";
 import { refreshTokens } from "./schema/authentication.schema";
+import { resolveModule } from "@modules/core/resolveModule";
 
 // Access tokens are only accepted when they were issued by this api for this api, signed with HS256.
 export const JWT_ISSUER = "todo-api";
@@ -54,12 +55,12 @@ class TokenService extends BaseModule {
   constructor() {
     super("auth.token.service", "Business Logic for Token Management");
 
+    this.userService = resolveModule(UserService);
+    this.authorizationService = resolveModule(AuthorizationService);
+
     if (!TokenService.instance) {
       TokenService.instance = this;
     }
-
-    this.userService = new UserService();
-    this.authorizationService = new AuthorizationService();
 
     return TokenService.instance;
   }

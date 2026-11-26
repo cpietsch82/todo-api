@@ -10,6 +10,7 @@ import AuthorizationService from "../authorization/AuthorizationService";
 import { HttpError } from "@/utils/HttpError";
 import { isUniqueViolation } from "@/utils/dbErrors";
 import crypto from "node:crypto";
+import { resolveModule } from "@modules/core/resolveModule";
 
 // Hash of a random password, compared against when there is no user or no password for the e-mail. A login then takes
 // the same time whether the e-mail exists or not, so the response time does not reveal which accounts exist.
@@ -29,8 +30,8 @@ export class AuthenticationService extends BaseModule {
       AuthenticationService.instance = this;
     }
 
-    this.tokenService = new TokenService();
-    this.authorizationService = new AuthorizationService();
+    this.tokenService = resolveModule(TokenService);
+    this.authorizationService = resolveModule(AuthorizationService);
 
     return AuthenticationService.instance;
   }

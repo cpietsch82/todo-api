@@ -10,6 +10,7 @@ import { lockList, lockUsers } from "@/modules/todo-lists/locks";
 import { MAX_TODOS_PER_LIST } from "@/modules/todo-lists/limits";
 import { hasListRole } from "@/modules/todo-lists/listRoles";
 import { todoListMembers, todoLists, type ListRole, type TodoList } from "@/modules/todo-lists/schema/todo-list.schema";
+import { resolveModule } from "@modules/core/resolveModule";
 
 /** the user who wants to access a todo, as the access token describes it (req.user) */
 export interface AccessingUser {
@@ -23,7 +24,7 @@ export class TodoService extends BaseModule {
 
   constructor() {
     super("todo.service", "Business logic for Todo management");
-    this.todoListService = new TodoListService();
+    this.todoListService = resolveModule(TodoListService);
 
     if (!TodoService.instance) {
       TodoService.instance = this;

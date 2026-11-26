@@ -25,6 +25,7 @@ import { TodoListService } from "@/modules/todo-lists/TodoListService";
 import { hasListRole } from "@/modules/todo-lists/listRoles";
 import { MAX_TODOS_PER_LIST } from "@/modules/todo-lists/limits";
 import type { AccessingUser } from "./TodoService";
+import { resolveModule } from "@modules/core/resolveModule";
 
 export class TodoAPI extends APIModule {
   private static instance: TodoAPI;
@@ -34,8 +35,8 @@ export class TodoAPI extends APIModule {
   constructor() {
     super("todo.api", "API Module for Todo CRUD operations", "/todos");
 
-    this.todoService = new TodoService();
-    this.todoCommentService = new TodoCommentService();
+    this.todoService = resolveModule(TodoService);
+    this.todoCommentService = resolveModule(TodoCommentService);
 
     if (!TodoAPI.instance) {
       TodoAPI.instance = this;
@@ -142,7 +143,7 @@ export class TodoAPI extends APIModule {
    * @throws HttpError 404 for an unknown list, 403 below editor, 409 for a full list
    */
   private async ensureCanAddToList(listId: string, user: AccessingUser): Promise<void> {
-    const todoListService = new TodoListService();
+    const todoListService = resolveModule(TodoListService);
     const list = await todoListService.getListById(listId);
     if (!list) throw HttpError.notFound("List not found");
 

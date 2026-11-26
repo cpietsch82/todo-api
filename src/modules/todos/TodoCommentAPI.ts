@@ -19,6 +19,7 @@ import {
   requireTodoCommentEditAccess,
   requireTodoCommentOwnership,
 } from "@/middleware/permissions";
+import { resolveModule } from "@modules/core/resolveModule";
 
 export class TodoCommentAPI extends APIModule {
   private static instance: TodoCommentAPI;
@@ -27,7 +28,7 @@ export class TodoCommentAPI extends APIModule {
   constructor() {
     super("todoComment.api", "API Module for Todo Comment management", "/todo-comments");
 
-    this.todoCommentService = new TodoCommentService();
+    this.todoCommentService = resolveModule(TodoCommentService);
 
     if (!TodoCommentAPI.instance) {
       TodoCommentAPI.instance = this;
@@ -36,7 +37,7 @@ export class TodoCommentAPI extends APIModule {
   }
 
   protected initializeRoutes(): void {
-    const requireCommentOwner = requireTodoCommentOwnership(new TodoCommentService());
+    const requireCommentOwner = requireTodoCommentOwnership(resolveModule(TodoCommentService));
     // a comment can be written on every todo the user may see, not only on own ones: that makes a discussion
     const requireAccessToCommentedTodo = requireTodoAccess((req) => req.body?.commentRecord?.todoId);
 
