@@ -26,12 +26,12 @@ export class AuthenticationService extends BaseModule {
   constructor() {
     super("authentication.service", "Business logic for User authentication management");
 
+    this.tokenService = resolveModule(TokenService);
+    this.authorizationService = resolveModule(AuthorizationService);
+
     if (!AuthenticationService.instance) {
       AuthenticationService.instance = this;
     }
-
-    this.tokenService = resolveModule(TokenService);
-    this.authorizationService = resolveModule(AuthorizationService);
 
     return AuthenticationService.instance;
   }

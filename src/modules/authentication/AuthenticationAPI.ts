@@ -22,8 +22,9 @@ export class AuthenticationAPI extends APIModule {
     super("authentication.api", "API Module for user authentication operations", "/auth", true);
 
     this.authenticationService = resolveModule(AuthenticationService);
-    if (!AuthenticationAPI.instance) AuthenticationAPI.instance = this;
     this.tokenService = resolveModule(TokenService);
+
+    if (!AuthenticationAPI.instance) AuthenticationAPI.instance = this;
 
     return AuthenticationAPI.instance;
   }

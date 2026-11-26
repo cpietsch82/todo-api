@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import path from "node:path";
-import { readdirSync, readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import type { Server } from "node:http";
 import { APIModule } from "@modules/core/APIModule";
 import { findAPIModuleFiles, instantiateAPIModules } from "@modules/core/apiLoader";
@@ -9,15 +10,16 @@ import { TodoListContactAPI } from "@modules/todo-lists/TodoListContactAPI";
 import { TodoListService } from "@modules/todo-lists/TodoListService";
 import { getTestServer } from "@tests/integration.setup";
 
-// Source scan independent of the loader: every "class X extends APIModule" under src/modules, without tests.
+// Source scan independent of the loader: every "class X extends APIModule" under src/modules, without test folders.
 function scanSource(): { file: string; className: string }[] {
   const modulesDir = path.resolve(__dirname, "../..");
   const found: { file: string; className: string }[] = [];
   for (const entry of readdirSync(modulesDir, { recursive: true, encoding: "utf8" })) {
-    if (!entry.endsWith(".ts") || entry.endsWith(".test.ts")) continue;
+    if (!entry.endsWith(".ts") || entry.split(path.sep).includes("test")) continue;
     const file = path.join(modulesDir, entry);
-    const match = /class (\w+) extends APIModule\b/.exec(readFileSync(file, "utf8"));
-    if (match) found.push({ file, className: match[1] });
+    for (const match of readFileSync(file, "utf8").matchAll(/class (\w+) extends APIModule\b/g)) {
+      found.push({ file, className: match[1] });
+    }
   }
   return found;
 }
@@ -54,5 +56,20 @@ describe("apiLoader", () => {
     const files = findAPIModuleFiles();
     expect(files).toEqual([...files].sort());
     expect(files.every((f) => path.isAbsolute(f) && /API\.(ts|js)$/.test(f))).toBe(true);
+  });
+
+  it("should skip test folders, test files and everything not named *API", () => {
+    // the build compiles helpers in test folders too, an *API file there must not reach production
+    const root = mkdtempSync(path.join(tmpdir(), "api-loader-"));
+    try {
+      for (const file of ["todos/TodoAPI.ts", "todos/test/FakeAPI.ts", "todos/test/TodoAPI.test.ts", "core/APIModule.ts", "users/UserAPI.js"]) {
+        mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+        writeFileSync(path.join(root, file), "");
+      }
+
+      expect(findAPIModuleFiles(root)).toEqual([path.join(root, "todos/TodoAPI.ts"), path.join(root, "users/UserAPI.js")]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

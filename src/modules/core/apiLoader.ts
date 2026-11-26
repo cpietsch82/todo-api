@@ -8,11 +8,11 @@ type APIModuleClass = new () => APIModule;
 
 /**
  * Finds all files named *API.ts (or *API.js once compiled) below the modules directory, as absolute, sorted paths.
+ * Test folders are skipped: the build compiles their helpers too, and an *API file there must not reach production.
  */
-export function findAPIModuleFiles(): string[] {
-  const modulesDir = path.join(__dirname, "..");
+export function findAPIModuleFiles(modulesDir = path.join(__dirname, "..")): string[] {
   return readdirSync(modulesDir, { recursive: true, encoding: "utf8" })
-    .filter((entry) => /API\.(ts|js)$/.test(entry))
+    .filter((entry) => /API\.(ts|js)$/.test(entry) && !entry.split(path.sep).includes("test"))
     .map((entry) => path.join(modulesDir, entry))
     .sort();
 }
