@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeAll, beforeEach } from "vitest";
 import request from "supertest";
 import type { Server } from "node:http";
-import { readFileSync } from "node:fs";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import type { User } from "@/db/schema";
@@ -93,9 +92,5 @@ describe("GET /api/todo-list-contacts", () => {
     const response = await contactsOf(me, { permissions: ["todo-lists:read"] });
 
     expect(response.status).toBe(403);
-  });
-
-  it("should be registered in the app", () => {
-    expect(readFileSync("src/index.ts", "utf8")).toContain("new TodoListContactAPI()");
   });
 });

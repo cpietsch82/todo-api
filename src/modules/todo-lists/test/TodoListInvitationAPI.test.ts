@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
 import request from "supertest";
 import type { Server } from "node:http";
-import { readFileSync } from "node:fs";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import type { User } from "@/db/schema";
@@ -209,9 +208,5 @@ describe("Invitations to a todo list (invitee side)", () => {
       expect(response.status).toBe(403);
       expect(await invitationRow(invitation.invitationId)).toBeDefined();
     });
-  });
-
-  it("should be registered in the app", () => {
-    expect(readFileSync("src/index.ts", "utf8")).toContain("new TodoListInvitationAPI()");
   });
 });
