@@ -1,8 +1,8 @@
 import { db } from "@/db";
 import { BaseModule } from "../core/BaseModule";
-import { NewTodoComment, TodoComment, todoComments, UpdateTodoComment } from "./schema/todo.comment.schema";
+import { NewTodoComment, TodoComment, todoCommentMentions, todoComments, UpdateTodoComment } from "./schema/todo.comment.schema";
 import type { Todo } from "./schema/todo.schema";
-import { and, asc, desc, eq, isNull, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, sql, type SQL } from "drizzle-orm";
 import { users } from "@/modules/users/schema/user.schema";
 import { type CommentCursor, encodeCommentCursor } from "./commentCursor";
 import { hasPermission } from "@/modules/authorization/permissions";
@@ -54,6 +54,8 @@ export interface DiscussionComment {
   replyCount: number;
   /** only public fields of the author, no e-mail */
   author: { userId: string; username: string } | null;
+  /** the members mentioned in the text, with their current username; empty for a placeholder */
+  mentions: { userId: string; username: string }[];
 }
 
 export interface CommentPage {
@@ -166,6 +168,10 @@ export class TodoCommentService extends BaseModule {
     const nextCursor =
       hasMore && oldest ? encodeCommentCursor({ createdAt: oldest.createdAtText, commentId: oldest.commentId }) : null;
 
+    const mentionsByComment = await this.loadMentions(
+      kept.filter((row) => row.deletedAt === null).map((row) => row.commentId),
+    );
+
     const items = kept.map((row): DiscussionComment => {
       const deleted = row.deletedAt !== null;
       return {
@@ -181,10 +187,31 @@ export class TodoCommentService extends BaseModule {
         replyCount: row.replyCount,
         author:
           deleted || row.authorId === null ? null : { userId: row.authorId, username: row.authorUsername! },
+        mentions: deleted ? [] : (mentionsByComment.get(row.commentId) ?? []),
       };
     });
 
     return { items: items.reverse(), nextCursor };
+  }
+
+  /** the mentions of all given comments in one query, sorted by username; no query without comments */
+  private async loadMentions(commentIds: string[]): Promise<Map<string, { userId: string; username: string }[]>> {
+    const byComment = new Map<string, { userId: string; username: string }[]>();
+    if (commentIds.length === 0) return byComment;
+
+    const rows = await db
+      .select({ commentId: todoCommentMentions.commentId, userId: users.userId, username: users.username })
+      .from(todoCommentMentions)
+      .innerJoin(users, eq(todoCommentMentions.userId, users.userId))
+      .where(inArray(todoCommentMentions.commentId, commentIds))
+      .orderBy(asc(users.username), asc(users.userId));
+
+    for (const { commentId, userId, username } of rows) {
+      const list = byComment.get(commentId) ?? [];
+      list.push({ userId, username });
+      byComment.set(commentId, list);
+    }
+    return byComment;
   }
 
   /**
