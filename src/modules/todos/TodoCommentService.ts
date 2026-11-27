@@ -14,6 +14,9 @@ import { todoListMembers, todoLists } from "@/modules/todo-lists/schema/todo-lis
 import { extractMentionIds } from "./commentMentions";
 import { CommentEventsService, type CommentEvent } from "./CommentEventsService";
 
+/** reads run on the pool or inside a transaction */
+type DbExecutor = typeof db | DbTransaction;
+
 /** the parent of a reply does not exist, belongs to another todo or is deleted */
 export class InvalidParentCommentError extends Error {
   constructor() {
@@ -154,8 +157,9 @@ export class TodoCommentService extends BaseModule {
     return { items, nextCursor, total: stats.total, lastCommentAt: stats.lastCommentAt };
   }
 
-  async getDiscussionComment(commentId: string): Promise<DiscussionComment | undefined> {
-    const { items } = await this.queryCommentPage(eq(todoComments.commentId, commentId), { limit: 1 });
+  /** with a transaction the comment is read inside it, so a write and the reading of its result fail together */
+  async getDiscussionComment(commentId: string, executor: DbExecutor = db): Promise<DiscussionComment | undefined> {
+    const { items } = await this.queryCommentPage(eq(todoComments.commentId, commentId), { limit: 1 }, executor);
     return items[0];
   }
 
@@ -163,12 +167,13 @@ export class TodoCommentService extends BaseModule {
   private async queryCommentPage(
     where: SQL,
     page: PageParams,
+    executor: DbExecutor = db,
   ): Promise<{ items: DiscussionComment[]; nextCursor: string | null }> {
     const olderThanCursor = page.before
       ? sql`(${todoComments.createdAt}, ${todoComments.commentId}) < (${page.before.createdAt}::timestamp, ${page.before.commentId}::uuid)`
       : undefined;
 
-    const rows = await db
+    const rows = await executor
       .select({
         commentId: todoComments.commentId,
         todoId: todoComments.todoId,
@@ -200,6 +205,7 @@ export class TodoCommentService extends BaseModule {
 
     const mentionsByComment = await this.loadMentions(
       kept.filter((row) => row.deletedAt === null).map((row) => row.commentId),
+      executor,
     );
 
     const items = kept.map((row): DiscussionComment => {
@@ -225,11 +231,14 @@ export class TodoCommentService extends BaseModule {
   }
 
   /** the mentions of all given comments in one query, sorted by username; no query without comments */
-  private async loadMentions(commentIds: string[]): Promise<Map<string, { userId: string; username: string }[]>> {
+  private async loadMentions(
+    commentIds: string[],
+    executor: DbExecutor = db,
+  ): Promise<Map<string, { userId: string; username: string }[]>> {
     const byComment = new Map<string, { userId: string; username: string }[]>();
     if (commentIds.length === 0) return byComment;
 
-    const rows = await db
+    const rows = await executor
       .select({ commentId: todoCommentMentions.commentId, userId: users.userId, username: users.username })
       .from(todoCommentMentions)
       .innerJoin(users, eq(todoCommentMentions.userId, users.userId))
@@ -286,7 +295,7 @@ export class TodoCommentService extends BaseModule {
   async createTodoComment(data: NewTodoComment): Promise<DiscussionComment | undefined> {
     const mentionIds = extractMentionIds(data.comment ?? null);
 
-    const commentId = await withRetryOnDeadlock(() =>
+    const created = await withRetryOnDeadlock(() =>
       db.transaction(async (tx) => {
         if (data.parentCommentId) {
           // FOR SHARE: a concurrent delete of the parent (soft or hard) waits until the reply is in
@@ -303,13 +312,11 @@ export class TodoCommentService extends BaseModule {
 
         const [created] = await tx.insert(todoComments).values(data).returning({ commentId: todoComments.commentId });
         await this.replaceMentions(tx, created.commentId, [], mentionIds);
-        return created.commentId;
+        // read inside the transaction: when reading fails, the comment is not stored either
+        return this.getDiscussionComment(created.commentId, tx);
       }),
     ).catch(mapMentionForeignKeyError);
 
-    // read after the commit (the reading uses db)
-    // undefined only when the comment was deleted right after it was written
-    const created = await this.getDiscussionComment(commentId);
     if (created) {
       await this.announce(created.todoId, async () => {
         const parentReplyCount = created.parentCommentId ? await this.countRepliesOf(created.parentCommentId) : undefined;
@@ -329,7 +336,7 @@ export class TodoCommentService extends BaseModule {
    * @throws InvalidMentionError when a newly mentioned user may not be mentioned on this todo
    */
   async updateTodoComment(commentId: string, updateData: UpdateTodoComment): Promise<DiscussionComment | undefined> {
-    const outcome = await withRetryOnDeadlock(() =>
+    const result = await withRetryOnDeadlock(() =>
       db.transaction(async (tx) => {
         // FOR UPDATE: a concurrent delete waits, so the comment cannot become a placeholder before the update
         const [current] = await tx
@@ -337,9 +344,11 @@ export class TodoCommentService extends BaseModule {
           .from(todoComments)
           .where(and(eq(todoComments.commentId, commentId), isNull(todoComments.deletedAt)))
           .for("update");
-        if (!current) return "gone" as const;
+        if (!current) return { outcome: "gone" as const };
         // the same text again is no edit
-        if (updateData.comment === undefined || updateData.comment === current.comment) return "unchanged" as const;
+        if (updateData.comment === undefined || updateData.comment === current.comment) {
+          return { outcome: "unchanged" as const, comment: await this.getDiscussionComment(commentId, tx) };
+        }
 
         const oldIds = new Set(extractMentionIds(current.comment));
         const textIds = extractMentionIds(updateData.comment);
@@ -359,14 +368,14 @@ export class TodoCommentService extends BaseModule {
         const storedIds = stored.map((row) => row.userId);
         const wantedIds = textIds.filter((id) => storedIds.includes(id) || addedIds.includes(id));
         await this.replaceMentions(tx, commentId, storedIds, wantedIds);
-        return "changed" as const;
+        // read inside the transaction: when reading fails, the edit is rolled back
+        return { outcome: "changed" as const, comment: await this.getDiscussionComment(commentId, tx) };
       }),
     ).catch(mapMentionForeignKeyError);
-    if (outcome === "gone") return undefined;
+    if (result.outcome === "gone") return undefined;
 
-    // read after the commit (the reading uses db)
-    const updated = await this.getDiscussionComment(commentId);
-    if (updated && outcome === "changed") {
+    const updated = result.comment;
+    if (updated && result.outcome === "changed") {
       await this.announce(updated.todoId, async () => ({ name: "comment.updated", data: { comment: updated } }));
     }
     return updated;
