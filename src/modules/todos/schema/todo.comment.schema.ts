@@ -4,6 +4,7 @@ import { todos } from "./todo.schema";
 import { users } from "@/db/schema";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 import z from "zod";
+import { type CommentCursor, decodeCommentCursor } from "../commentCursor";
 
 export const todoComments = pgTable(
   "todo_comments",
@@ -85,6 +86,22 @@ export const updateTodoCommentSchema = z.object({
   }).partial(),
 });
 
+export const commentPageQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(50).default(20),
+  before: z
+    .string()
+    .transform((value, ctx): CommentCursor => {
+      const cursor = decodeCommentCursor(value);
+      if (!cursor) {
+        ctx.addIssue({ code: "custom", message: "Invalid cursor" });
+        return z.NEVER;
+      }
+      return cursor;
+    })
+    .optional(),
+});
+
+export type CommentPageQuery = z.infer<typeof commentPageQuerySchema>;
 export type InsertTodoComment = z.infer<typeof InsertTodoCommentSchema>;
 export type SelectTodoComment = z.infer<typeof SelectTodoCommentSchema>;
 

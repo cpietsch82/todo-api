@@ -11,7 +11,8 @@ import {
   UpdateTodoBody,
   updateTodoSchema,
 } from "./schema/todo.schema";
-import { validateBody, validateParams } from "@/middleware/validate";
+import { type CommentPageQuery, commentPageQuerySchema } from "./schema/todo.comment.schema";
+import { validateBody, validateParams, validateQuery } from "@/middleware/validate";
 import {
   requirePermissions,
   requireTodoAccess,
@@ -60,6 +61,7 @@ export class TodoAPI extends APIModule {
     this.router.get(
       "/:todoId/comments",
       validateParams(todoByIdSchema),
+      validateQuery(commentPageQuerySchema),
       requirePermissions("todo-comments:read"),
       requireAccess,
       typedHandler(this.getCommentsOfTodo.bind(this)),
@@ -100,7 +102,7 @@ export class TodoAPI extends APIModule {
   }
 
   private async getCommentsOfTodo(req: TypedRequestParams<TodoByIdParams>, res: Response) {
-    res.json(await this.todoCommentService.getCommentsForTodo(req.params.todoId));
+    res.json(await this.todoCommentService.getDiscussionPage(req.params.todoId, res.locals.query as CommentPageQuery));
   }
 
   /**
