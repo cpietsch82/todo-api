@@ -12,7 +12,7 @@ import { resolveModule } from "@modules/core/resolveModule";
 import { getPgConstraintName, isForeignKeyViolation, withRetryOnDeadlock } from "@/utils/dbErrors";
 import { todoListMembers, todoLists } from "@/modules/todo-lists/schema/todo-list.schema";
 import { extractMentionIds } from "./commentMentions";
-import { CommentEventsService } from "./CommentEventsService";
+import { CommentEventsService, type CommentEvent } from "./CommentEventsService";
 
 /** the parent of a reply does not exist, belongs to another todo or is deleted */
 export class InvalidParentCommentError extends Error {
@@ -311,10 +311,12 @@ export class TodoCommentService extends BaseModule {
     // undefined only when the comment was deleted right after it was written
     const created = await this.getDiscussionComment(commentId);
     if (created) {
-      const parentReplyCount = created.parentCommentId ? await this.countRepliesOf(created.parentCommentId) : undefined;
-      await this.commentEvents.publish(created.todoId, {
-        name: "comment.created",
-        data: parentReplyCount === undefined ? { comment: created } : { comment: created, parentReplyCount },
+      await this.announce(created.todoId, async () => {
+        const parentReplyCount = created.parentCommentId ? await this.countRepliesOf(created.parentCommentId) : undefined;
+        return {
+          name: "comment.created",
+          data: parentReplyCount === undefined ? { comment: created } : { comment: created, parentReplyCount },
+        };
       });
     }
     return created;
@@ -365,7 +367,7 @@ export class TodoCommentService extends BaseModule {
     // read after the commit (the reading uses db)
     const updated = await this.getDiscussionComment(commentId);
     if (updated && outcome === "changed") {
-      await this.commentEvents.publish(updated.todoId, { name: "comment.updated", data: { comment: updated } });
+      await this.announce(updated.todoId, async () => ({ name: "comment.updated", data: { comment: updated } }));
     }
     return updated;
   }
@@ -498,11 +500,26 @@ export class TodoCommentService extends BaseModule {
   async publishRemoval(removal: CommentRemoval): Promise<void> {
     for (const { commentId, parentCommentId } of removal.removedComments) {
       const mode = commentId === removal.commentId ? removal.mode : "hard";
-      const data =
-        parentCommentId === null
-          ? { commentId, parentCommentId, mode }
-          : { commentId, parentCommentId, mode, parentReplyCount: await this.countRepliesOf(parentCommentId) };
-      await this.commentEvents.publish(removal.todoId, { name: "comment.deleted", data });
+      await this.announce(removal.todoId, async () => {
+        const data =
+          parentCommentId === null
+            ? { commentId, parentCommentId, mode }
+            : { commentId, parentCommentId, mode, parentReplyCount: await this.countRepliesOf(parentCommentId) };
+        return { name: "comment.deleted", data };
+      });
+    }
+  }
+
+  /**
+   * Announces after a commit. A failing announcement (e.g. the count query) is only logged: it must never turn a
+   * committed write into an error. Nothing is built when nobody listens to the todo.
+   */
+  private async announce(todoId: string, build: () => Promise<CommentEvent>): Promise<void> {
+    try {
+      if (!this.commentEvents.hasStreams(todoId)) return;
+      await this.commentEvents.publish(todoId, await build());
+    } catch (error) {
+      console.error("comment events: announcing a change failed", error);
     }
   }
 

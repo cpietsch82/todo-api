@@ -15,7 +15,8 @@ export interface CommentStream {
   expiresAt: number;
   send(event: string, data: unknown): void;
   ping(): void;
-  close(): void;
+  /** "evicted": the user has too many connections, the client should not reconnect on its own */
+  close(reason?: "evicted"): void;
 }
 
 export type CommentEvent =
@@ -40,6 +41,8 @@ export class CommentEventsService extends BaseModule {
   protected todoService: TodoService;
   /** in subscription order, so the oldest connection of a user comes first */
   private subscriptions: Subscription[] = [];
+  /** set by closeAll (shutdown): connections that arrive late are closed right away */
+  private closing = false;
 
   constructor() {
     super("comment.events.service", "Live distribution of comment events");
@@ -52,11 +55,15 @@ export class CommentEventsService extends BaseModule {
   }
 
   subscribe(todoId: string, stream: CommentStream): () => void {
+    if (this.closing) {
+      this.closeQuietly(stream);
+      return () => {};
+    }
     const subscription: Subscription = { todoId, stream };
     this.subscriptions.push(subscription);
 
     const ofUser = this.subscriptions.filter((entry) => entry.stream.user.id === stream.user.id);
-    if (ofUser.length > MAX_COMMENT_STREAMS_PER_USER) this.drop(ofUser[0]);
+    if (ofUser.length > MAX_COMMENT_STREAMS_PER_USER) this.drop(ofUser[0], "evicted");
 
     return () => this.remove(subscription);
   }
@@ -78,8 +85,19 @@ export class CommentEventsService extends BaseModule {
     return () => clearInterval(timer);
   }
 
+  hasStreams(todoId: string): boolean {
+    return this.subscriptions.some((entry) => entry.todoId === todoId);
+  }
+
+  /** closes every connection and refuses new ones until reopen (the process is shutting down) */
   closeAll(): void {
+    this.closing = true;
     for (const subscription of [...this.subscriptions]) this.drop(subscription);
+  }
+
+  /** accepts connections again after closeAll, for tests that share the instance */
+  reopen(): void {
+    this.closing = false;
   }
 
   countStreams(): number {
@@ -127,10 +145,14 @@ export class CommentEventsService extends BaseModule {
   }
 
   /** closes the stream only if this call removed it, so concurrent paths never close twice */
-  private drop(subscription: Subscription): void {
+  private drop(subscription: Subscription, reason?: "evicted"): void {
     if (!this.remove(subscription)) return;
+    this.closeQuietly(subscription.stream, reason);
+  }
+
+  private closeQuietly(stream: CommentStream, reason?: "evicted"): void {
     try {
-      subscription.stream.close();
+      stream.close(reason);
     } catch {
       // already broken, nothing left to close
     }

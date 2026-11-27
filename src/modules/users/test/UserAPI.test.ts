@@ -324,6 +324,7 @@ describe("UserAPI", () => {
         ]);
       } finally {
         events.closeAll();
+        events.reopen();
       }
     });
 

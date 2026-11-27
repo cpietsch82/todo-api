@@ -7,9 +7,10 @@ import type { Todo, User } from "@/db/schema";
 import { todoListMembers, todoLists } from "@modules/todo-lists/schema/todo-list.schema";
 import { TodoAPI } from "@modules/todos/TodoAPI";
 import { TodoCommentAPI } from "@modules/todos/TodoCommentAPI";
-import { CommentEventsService } from "@modules/todos/CommentEventsService";
+import { CommentEventsService, MAX_COMMENT_STREAMS_PER_USER } from "@modules/todos/CommentEventsService";
 import { createAuthHeader, generateTodo, generateUser, NON_EXISTENT_UUID } from "@tests/test.helpers";
 import { getTestServer } from "@tests/integration.setup";
+import { TodoService } from "@modules/todos/TodoService";
 import { resolveModule } from "@modules/core/resolveModule";
 
 interface OpenStream extends IncomingMessage {
@@ -70,9 +71,11 @@ describe("GET /api/todos/:todoId/comments/events", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     for (const stream of open) stream.destroy();
     open = [];
     events.closeAll();
+    events.reopen();
   });
 
   it("should open a stream with the SSE headers and no compression", async () => {
@@ -134,5 +137,42 @@ describe("GET /api/todos/:todoId/comments/events", () => {
 
     await ended;
     expect(events.countStreams()).toBe(0);
+  });
+
+  it("should not keep a stream whose client left while the access check was running", async () => {
+    const todoService = resolveModule(TodoService);
+    const original = todoService.getTodoById.bind(todoService);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    vi.spyOn(todoService, "getTodoById").mockImplementationOnce(async (id) => {
+      await gate;
+      return original(id);
+    });
+    const { port } = server.address() as AddressInfo;
+    const authHeader = await createAuthHeader(viewer);
+    const req = http.get({ host: "127.0.0.1", port, path: `/api/todos/${todo.todoId}/comments/events`, headers: authHeader });
+    req.on("error", () => {});
+    await vi.waitFor(() => expect(todoService.getTodoById).toHaveBeenCalled());
+
+    req.destroy();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    release();
+
+    await vi.waitFor(() => expect(events.countStreams()).toBe(0));
+    // give the handler time to subscribe wrongly
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(events.countStreams()).toBe(0);
+  });
+
+  it("should tell the evicted connection why it ended", async () => {
+    const first = await openStream(viewer, todo.todoId);
+    await readUntil(first, ": connected");
+    const ended = new Promise<void>((resolve) => first.on("end", resolve));
+    for (let i = 0; i < MAX_COMMENT_STREAMS_PER_USER; i++) {
+      await readUntil(await openStream(viewer, todo.todoId), ": connected");
+    }
+
+    await ended;
+    expect(first.received).toContain(": evicted\n\n");
   });
 });

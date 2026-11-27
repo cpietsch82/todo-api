@@ -13,6 +13,7 @@ interface FakeStream extends CommentStream {
   pings: number;
   closed: boolean;
   closes: number;
+  reasons: (string | undefined)[];
 }
 
 function fakeStream(user: User, options: { expiresAt?: number; throwOnSend?: boolean } = {}): FakeStream {
@@ -23,6 +24,7 @@ function fakeStream(user: User, options: { expiresAt?: number; throwOnSend?: boo
     pings: 0,
     closed: false,
     closes: 0,
+    reasons: [],
     send(event, data) {
       if (options.throwOnSend) throw new Error("socket gone");
       stream.sent.push({ event, data });
@@ -30,7 +32,8 @@ function fakeStream(user: User, options: { expiresAt?: number; throwOnSend?: boo
     ping() {
       stream.pings++;
     },
-    close() {
+    close(reason) {
+      stream.reasons.push(reason);
       stream.closes++;
       stream.closed = true;
     },
@@ -61,7 +64,10 @@ describe("CommentEventsService", () => {
     todo = await generateTodo(owner.userId);
   });
 
-  afterEach(() => service.closeAll());
+  afterEach(() => {
+    service.closeAll();
+    service.reopen();
+  });
 
   it("should send an event only to the streams of that todo", async () => {
     const otherTodo = await generateTodo(owner.userId);
@@ -127,6 +133,34 @@ describe("CommentEventsService", () => {
     expect(streams[0].closed).toBe(true);
     expect(streams.slice(1).every((stream) => !stream.closed)).toBe(true);
     expect(service.countStreams()).toBe(5);
+  });
+
+  it("should tell only the evicted stream why it was closed", () => {
+    const streams = Array.from({ length: 6 }, () => fakeStream(owner));
+    streams.forEach((stream) => service.subscribe(todo.todoId, stream));
+
+    expect(streams[0].reasons).toEqual(["evicted"]);
+    service.closeAll();
+    expect(streams.slice(1).every((stream) => stream.reasons[0] === undefined)).toBe(true);
+  });
+
+  it("should know whether anybody listens to a todo", () => {
+    expect(service.hasStreams(todo.todoId)).toBe(false);
+    const unsubscribe = service.subscribe(todo.todoId, fakeStream(owner));
+    expect(service.hasStreams(todo.todoId)).toBe(true);
+    unsubscribe();
+    expect(service.hasStreams(todo.todoId)).toBe(false);
+  });
+
+  it("should close a stream that subscribes after closeAll right away", () => {
+    service.closeAll();
+    const late = fakeStream(owner);
+
+    const unsubscribe = service.subscribe(todo.todoId, late);
+
+    expect(late.closes).toBe(1);
+    expect(service.countStreams()).toBe(0);
+    expect(() => unsubscribe()).not.toThrow();
   });
 
   it("should forget a stream after unsubscribe and not write to it again", async () => {

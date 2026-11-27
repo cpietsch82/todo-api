@@ -29,6 +29,11 @@ import type { AccessingUser } from "./TodoService";
 import { resolveModule } from "@modules/core/resolveModule";
 import { CommentEventsService, type CommentStream } from "./CommentEventsService";
 
+/** writes to a destroyed response neither throw nor end it, so the distributor must be told to drop the stream */
+function assertOpen(res: Response) {
+  if (res.destroyed) throw new Error("the client connection is closed");
+}
+
 export class TodoAPI extends APIModule {
   private static instance: TodoAPI;
   private todoService: TodoService;
@@ -115,6 +120,8 @@ export class TodoAPI extends APIModule {
   }
 
   private streamCommentEvents(req: Request, res: Response) {
+    // the client may have left while the access check was running: 'close' is already emitted and would not come again
+    if (res.destroyed || req.socket.destroyed) return;
     res.status(200);
     res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
     res.setHeader("Cache-Control", "no-cache");
@@ -126,13 +133,17 @@ export class TodoAPI extends APIModule {
       user: req.user!,
       expiresAt: req.user!.exp! * 1000,
       send: (event, data) => {
+        assertOpen(res);
         if (!res.writableEnded) res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
       },
       ping: () => {
+        assertOpen(res);
         if (!res.writableEnded) res.write(": ping\n\n");
       },
-      close: () => {
-        if (!res.writableEnded) res.end();
+      close: (reason) => {
+        if (res.writableEnded) return;
+        if (reason === "evicted" && !res.destroyed) res.write(": evicted\n\n");
+        res.end();
       },
     };
     const unsubscribe = resolveModule(CommentEventsService).subscribe(req.params.todoId as string, stream);

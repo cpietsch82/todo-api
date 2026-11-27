@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
 import request from "supertest";
 import type { Server } from "node:http";
 import { db } from "@/db";
@@ -10,6 +10,7 @@ import { todoComments } from "@modules/todos/schema/todo.comment.schema";
 import { CommentEventsService, type CommentStream } from "@modules/todos/CommentEventsService";
 import { createAuthHeader, generateTodo, generateTodoComment, generateUser, NON_EXISTENT_UUID } from "@tests/test.helpers";
 import { getTestServer } from "@tests/integration.setup";
+import { TodoCommentService } from "@modules/todos/TodoCommentService";
 import { resolveModule } from "@modules/core/resolveModule";
 
 interface FakeStream extends CommentStream {
@@ -57,7 +58,10 @@ describe("Live events for comment changes", () => {
     events.subscribe(todo.todoId, stream);
   });
 
-  afterEach(() => events.closeAll());
+  afterEach(() => {
+    events.closeAll();
+    events.reopen();
+  });
 
   const post = async (user: User, commentRecord: { todoId: string; comment: string; parentCommentId?: string }) =>
     request(server)
@@ -167,5 +171,72 @@ describe("Live events for comment changes", () => {
         data: { commentId: middle.commentId, parentCommentId: root.commentId, mode: "branch", parentReplyCount: 0 },
       },
     ]);
+  });
+
+  it("should announce a branch delete and the placeholder it empties as two events", async () => {
+    const root = await generateTodoComment(todo.todoId, owner.userId);
+    const emptied = await placeholder({ parentCommentId: root.commentId });
+    const branch = await generateTodoComment(todo.todoId, viewer.userId, { parentCommentId: emptied.commentId });
+    await generateTodoComment(todo.todoId, viewer.userId, { parentCommentId: branch.commentId });
+
+    const response = await remove(owner, branch.commentId, "?scope=branch");
+
+    expect(response.status).toBe(200);
+    expect(stream.sent).toEqual([
+      {
+        event: "comment.deleted",
+        data: { commentId: branch.commentId, parentCommentId: emptied.commentId, mode: "branch", parentReplyCount: 0 },
+      },
+      {
+        event: "comment.deleted",
+        data: { commentId: emptied.commentId, parentCommentId: root.commentId, mode: "hard", parentReplyCount: 0 },
+      },
+    ]);
+  });
+
+  describe("when announcing fails after the commit", () => {
+    const failCount = () => {
+      const countSpy = vi
+        .spyOn(resolveModule(TodoCommentService) as unknown as { countRepliesOf(id: string): Promise<number> }, "countRepliesOf")
+        .mockRejectedValue(new Error("db gone"));
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      return { countSpy, errorSpy };
+    };
+
+    afterEach(() => vi.restoreAllMocks());
+
+    it("should still answer 201 for a reply that was written", async () => {
+      const parent = await generateTodoComment(todo.todoId, owner.userId);
+      const { errorSpy } = failCount();
+
+      const response = await post(viewer, { todoId: todo.todoId, comment: "Antwort", parentCommentId: parent.commentId });
+
+      expect(response.status).toBe(201);
+      expect(errorSpy).toHaveBeenCalled();
+      expect(stream.sent).toEqual([]);
+    });
+
+    it("should still answer 200 for a delete that was committed", async () => {
+      const parent = await generateTodoComment(todo.todoId, owner.userId);
+      const reply = await generateTodoComment(todo.todoId, viewer.userId, { parentCommentId: parent.commentId });
+      const { errorSpy } = failCount();
+
+      const response = await remove(viewer, reply.commentId);
+
+      expect(response.status).toBe(200);
+      expect(errorSpy).toHaveBeenCalled();
+    });
+
+    it("should not count replies when nobody listens to the todo", async () => {
+      events.closeAll();
+      events.reopen();
+      const parent = await generateTodoComment(todo.todoId, owner.userId);
+      const { countSpy } = failCount();
+
+      const response = await post(viewer, { todoId: todo.todoId, comment: "Antwort", parentCommentId: parent.commentId });
+
+      expect(response.status).toBe(201);
+      expect(countSpy).not.toHaveBeenCalled();
+    });
   });
 });
