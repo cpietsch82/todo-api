@@ -27,6 +27,7 @@ import { hasListRole } from "@/modules/todo-lists/listRoles";
 import { MAX_TODOS_PER_LIST } from "@/modules/todo-lists/limits";
 import type { AccessingUser } from "./TodoService";
 import { resolveModule } from "@modules/core/resolveModule";
+import { CommentEventsService, type CommentStream } from "./CommentEventsService";
 
 export class TodoAPI extends APIModule {
   private static instance: TodoAPI;
@@ -66,6 +67,14 @@ export class TodoAPI extends APIModule {
       requireAccess,
       typedHandler(this.getCommentsOfTodo.bind(this)),
     );
+    // live changes of that discussion as server-sent events
+    this.router.get(
+      "/:todoId/comments/events",
+      validateParams(todoByIdSchema),
+      requirePermissions("todo-comments:read"),
+      requireAccess,
+      this.streamCommentEvents.bind(this),
+    );
     this.router.post("/", requirePermissions("todos:create"), validateBody(createTodoSchema), typedHandler(this.createTodo.bind(this)));
     this.router.patch(
       "/:todoId",
@@ -103,6 +112,32 @@ export class TodoAPI extends APIModule {
 
   private async getCommentsOfTodo(req: TypedRequestParams<TodoByIdParams>, res: Response) {
     res.json(await this.todoCommentService.getDiscussionPage(req.params.todoId, res.locals.query as CommentPageQuery));
+  }
+
+  private streamCommentEvents(req: Request, res: Response) {
+    res.status(200);
+    res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders();
+    res.write(": connected\n\n");
+
+    const stream: CommentStream = {
+      user: req.user!,
+      expiresAt: req.user!.exp! * 1000,
+      send: (event, data) => {
+        if (!res.writableEnded) res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+      },
+      ping: () => {
+        if (!res.writableEnded) res.write(": ping\n\n");
+      },
+      close: () => {
+        if (!res.writableEnded) res.end();
+      },
+    };
+    const unsubscribe = resolveModule(CommentEventsService).subscribe(req.params.todoId as string, stream);
+    // the response closes with the connection, the request already closes once its body is read
+    res.on("close", unsubscribe);
   }
 
   /**
