@@ -6,15 +6,18 @@ import { todos } from "@/modules/todos/schema/todo.schema";
 import { todoLists } from "@/modules/todo-lists/schema/todo-list.schema";
 import { TodoListService } from "@/modules/todo-lists/TodoListService";
 import { withRetryOnDeadlock } from "@/utils/dbErrors";
+import { TodoCommentService } from "@/modules/todos/TodoCommentService";
 import { resolveModule } from "@modules/core/resolveModule";
 
 export class UserService extends BaseModule {
   public static instance: UserService;
   protected todoListService: TodoListService;
+  protected todoCommentService: TodoCommentService;
 
   constructor() {
     super("user.service", "Business logic for User management");
     this.todoListService = resolveModule(TodoListService);
+    this.todoCommentService = resolveModule(TodoCommentService);
 
     if (!UserService.instance) {
       UserService.instance = this;
@@ -49,6 +52,8 @@ export class UserService extends BaseModule {
   /**
    * Deletes a user. Own lists are deleted (their todos go back to their creators), own todos without a list are
    * deleted. Todos of the user in lists of others stay there without creator (todos.user_id SET NULL).
+   * Live comments of the user are removed by the placeholder rule: replies of others stay below a placeholder without
+   * author, comments without replies are deleted.
    * The order matters: deleting the own lists turns the own todos in them into todos without a list first.
    * @returns undefined when the user does not exist (anymore), e.g. deleted by a concurrent request
    */
@@ -71,6 +76,8 @@ export class UserService extends BaseModule {
         for (const { listId } of ownLists) await this.todoListService.deleteList(listId, tx);
 
         await tx.delete(todos).where(and(eq(todos.userId, userId), isNull(todos.listId)));
+        // comments are the last locked level: user, lists, todos, comments
+        await this.todoCommentService.removeCommentsOfUser(userId, tx);
         const [user] = await tx.delete(users).where(eq(users.userId, userId)).returning();
 
         return user;

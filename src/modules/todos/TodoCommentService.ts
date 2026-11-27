@@ -2,7 +2,7 @@ import { db } from "@/db";
 import { BaseModule } from "../core/BaseModule";
 import { NewTodoComment, TodoComment, todoComments, UpdateTodoComment } from "./schema/todo.comment.schema";
 import type { Todo } from "./schema/todo.schema";
-import { and, desc, eq, isNull, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, sql, type SQL } from "drizzle-orm";
 import { users } from "@/modules/users/schema/user.schema";
 import { type CommentCursor, encodeCommentCursor } from "./commentCursor";
 import { hasPermission } from "@/modules/authorization/permissions";
@@ -286,6 +286,33 @@ export class TodoCommentService extends BaseModule {
     await tx.delete(todoComments).where(eq(todoComments.commentId, commentId));
     const cleanedUp = await this.cleanUpEmptyPlaceholders(tx, comment.parentCommentId);
     return { commentId, mode: "hard", removedCommentIds: [commentId, ...cleanedUp] };
+  }
+
+  /**
+   * Removes all live comments of a user by the placeholder rule (for the deletion of an account), so that replies of
+   * others survive below a placeholder without author. Runs in the transaction of the caller and locks the comments
+   * ordered by id, after user, lists and todos (lock order of the spec).
+   */
+  async removeCommentsOfUser(userId: string, tx: DbTransaction): Promise<void> {
+    const own = await tx
+      .select({ commentId: todoComments.commentId })
+      .from(todoComments)
+      .where(and(eq(todoComments.userId, userId), isNull(todoComments.deletedAt)))
+      .orderBy(asc(todoComments.commentId))
+      .for("update");
+
+    // the cleanup of an earlier hard delete can remove a later comment of the list
+    const alreadyRemoved = new Set<string>();
+    for (const { commentId } of own) {
+      if (alreadyRemoved.has(commentId)) continue;
+      try {
+        const removal = await this.removeComment(commentId, tx);
+        removal.removedCommentIds.forEach((id) => alreadyRemoved.add(id));
+      } catch (error) {
+        // gone meanwhile: nothing left to do for this comment
+        if (!(error instanceof CommentNotFoundError)) throw error;
+      }
+    }
   }
 
   /**

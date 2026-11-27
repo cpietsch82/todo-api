@@ -6,6 +6,13 @@ import UserService from "@modules/users/UserService";
 import { User } from "@/db/schema";
 import { createAuthHeader, generateUser, NON_EXISTENT_UUID } from "@tests/test.helpers";
 import { getTestServer } from "@tests/integration.setup";
+import { eq } from "drizzle-orm";
+import { db } from "@/db";
+import { TodoAPI } from "@modules/todos/TodoAPI";
+import { TodoCommentAPI } from "@modules/todos/TodoCommentAPI";
+import { todoComments } from "@modules/todos/schema/todo.comment.schema";
+import { todoListMembers, todoLists } from "@modules/todo-lists/schema/todo-list.schema";
+import { generateTodo, generateTodoComment } from "@tests/test.helpers";
 
 describe("UserAPI", () => {
   let server: Server;
@@ -262,6 +269,93 @@ describe("UserAPI", () => {
         .set(await createAuthHeader(testUser));
 
       expect(response.status).toBe(403);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // deleting an account with comments
+  // ---------------------------------------------------------------------------
+  describe("deleting an account with comments", () => {
+    let owner: User;
+    let gone: User;
+    let viewer: User;
+    let todoId: string;
+
+    const commentById = async (commentId: string) =>
+      (await db.select().from(todoComments).where(eq(todoComments.commentId, commentId)))[0];
+
+    const deleteAccount = async (user: User) =>
+      request(server).delete(`/api/users/${user.userId}`).set(await createAuthHeader(user));
+
+    beforeEach(async () => {
+      new TodoAPI();
+      new TodoCommentAPI();
+      owner = await generateUser({ email: "owner@test.com", username: "ownerx" });
+      gone = await generateUser({ email: "gone@test.com", username: "gonex" });
+      viewer = await generateUser({ email: "viewer@test.com", username: "viewerx" });
+      const [list] = await db.insert(todoLists).values({ name: "Einkauf", ownerId: owner.userId }).returning();
+      await db.insert(todoListMembers).values([
+        { listId: list.listId, userId: gone.userId, role: "editor" },
+        { listId: list.listId, userId: viewer.userId, role: "viewer" },
+      ]);
+      todoId = (await generateTodo(owner.userId, { listId: list.listId })).todoId;
+    });
+
+    it("should keep the replies of others as a placeholder without author when an account is deleted", async () => {
+      const parent = await generateTodoComment(todoId, gone.userId);
+      const reply = await generateTodoComment(todoId, viewer.userId, { parentCommentId: parent.commentId });
+
+      const response = await deleteAccount(gone);
+
+      expect(response.status).toBe(200);
+      expect(await commentById(parent.commentId)).toMatchObject({ comment: null, userId: null, deletedAt: expect.any(Date) });
+      expect(await commentById(reply.commentId)).toMatchObject({ comment: reply.comment });
+    });
+
+    it("should delete comments without replies of a deleted account completely", async () => {
+      const own = await generateTodoComment(todoId, gone.userId);
+
+      const response = await deleteAccount(gone);
+
+      expect(response.status).toBe(200);
+      expect(await commentById(own.commentId)).toBeUndefined();
+    });
+
+    it("should delete the account of a user whose live comment without replies is on a todo of someone else", async () => {
+      const own = await generateTodoComment(todoId, gone.userId);
+      await generateTodoComment(todoId, viewer.userId);
+
+      const response = await deleteAccount(gone);
+
+      expect(response.status).toBe(200);
+      expect(await commentById(own.commentId)).toBeUndefined();
+    });
+
+    it("should cope with a chain of own comments where a cleanup removes a later one", async () => {
+      const root = await generateTodoComment(todoId, gone.userId);
+      const child = await generateTodoComment(todoId, gone.userId, { parentCommentId: root.commentId });
+
+      const response = await deleteAccount(gone);
+
+      expect(response.status).toBe(200);
+      expect(await commentById(root.commentId)).toBeUndefined();
+      expect(await commentById(child.commentId)).toBeUndefined();
+    });
+
+    it("should show the placeholder of a deleted account without author and let a moderator remove it as a thread", async () => {
+      const parent = await generateTodoComment(todoId, gone.userId);
+      await generateTodoComment(todoId, viewer.userId, { parentCommentId: parent.commentId });
+      await deleteAccount(gone);
+
+      const list = await request(server).get(`/api/todos/${todoId}/comments`).set(await createAuthHeader(owner));
+      expect(list.status).toBe(200);
+      expect(list.body.items[0]).toMatchObject({ deleted: true, comment: null, author: null });
+
+      const removal = await request(server)
+        .delete(`/api/todo-comments/${parent.commentId}?scope=branch`)
+        .set(await createAuthHeader(owner));
+      expect(removal.status).toBe(200);
+      expect(removal.body).toMatchObject({ mode: "branch" });
     });
   });
 });
