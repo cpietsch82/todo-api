@@ -360,7 +360,13 @@ describe("Pages of the discussion of a todo", () => {
       const response = await remove(owner, parent.commentId);
 
       expect(response.status).toBe(200);
-      expect(response.body).toEqual({ commentId: parent.commentId, mode: "soft", removedCommentIds: [] });
+      expect(response.body).toEqual({
+        commentId: parent.commentId,
+        todoId: todo.todoId,
+        mode: "soft",
+        removedCommentIds: [],
+        removedComments: [{ commentId: parent.commentId, parentCommentId: null }],
+      });
       expect(await commentById(parent.commentId)).toMatchObject({ comment: null, deletedAt: expect.any(Date) });
       expect(await commentById(reply.commentId)).toBeDefined();
     });
@@ -375,6 +381,8 @@ describe("Pages of the discussion of a todo", () => {
         commentId: comment.commentId,
         mode: "hard",
         removedCommentIds: [comment.commentId],
+        todoId: todo.todoId,
+        removedComments: [{ commentId: comment.commentId, parentCommentId: null }],
       });
       expect(await commentById(comment.commentId)).toBeUndefined();
     });
@@ -493,7 +501,13 @@ describe("Pages of the discussion of a todo", () => {
       const response = await remove(owner, parent.commentId);
 
       expect(response.status).toBe(200);
-      expect(response.body).toEqual({ commentId: parent.commentId, mode: "soft", removedCommentIds: [] });
+      expect(response.body).toEqual({
+        commentId: parent.commentId,
+        todoId: todo.todoId,
+        mode: "soft",
+        removedCommentIds: [],
+        removedComments: [{ commentId: parent.commentId, parentCommentId: null }],
+      });
     });
 
     it("should answer 400 for an unknown scope", async () => {

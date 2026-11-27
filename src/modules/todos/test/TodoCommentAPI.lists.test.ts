@@ -109,6 +109,8 @@ describe("Discussion of todos in a list", () => {
         commentId: comment.commentId,
         mode: "hard",
         removedCommentIds: [comment.commentId],
+        todoId: todo.todoId,
+        removedComments: [{ commentId: comment.commentId, parentCommentId: null }],
       });
       expect(await commentById(comment.commentId)).toBeUndefined();
     });

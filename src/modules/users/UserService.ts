@@ -58,7 +58,7 @@ export class UserService extends BaseModule {
    * @returns undefined when the user does not exist (anymore), e.g. deleted by a concurrent request
    */
   async deleteUser(userId: string): Promise<User | undefined> {
-    return withRetryOnDeadlock(() =>
+    const { user, removals } = await withRetryOnDeadlock(() =>
       db.transaction(async (tx) => {
         // lock order of the spec (7.1): the user row, the own lists ordered by id, then the own todos ordered by id.
         // New todos and lists of the user wait for the user row (their foreign key check) and fail once the user is
@@ -77,12 +77,16 @@ export class UserService extends BaseModule {
 
         await tx.delete(todos).where(and(eq(todos.userId, userId), isNull(todos.listId)));
         // comments are the last locked level: user, lists, todos, comments
-        await this.todoCommentService.removeCommentsOfUser(userId, tx);
+        const removals = await this.todoCommentService.removeCommentsOfUser(userId, tx);
         const [user] = await tx.delete(users).where(eq(users.userId, userId)).returning();
 
-        return user;
+        return { user, removals };
       }),
     );
+
+    // after the commit: only now the discussions can see the placeholders
+    if (user) for (const removal of removals) await this.todoCommentService.publishRemoval(removal);
+    return user;
   }
 }
 

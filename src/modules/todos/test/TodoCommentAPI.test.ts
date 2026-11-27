@@ -367,6 +367,8 @@ describe("TodoCommentAPI", () => {
         commentId: existing.commentId,
         mode: "hard",
         removedCommentIds: [existing.commentId],
+        todoId: expect.any(String),
+        removedComments: [{ commentId: existing.commentId, parentCommentId: null }],
       });
 
       // verify it is actually gone

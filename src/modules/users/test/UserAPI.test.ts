@@ -12,6 +12,8 @@ import { TodoAPI } from "@modules/todos/TodoAPI";
 import { TodoCommentAPI } from "@modules/todos/TodoCommentAPI";
 import { todoComments } from "@modules/todos/schema/todo.comment.schema";
 import { todoListMembers, todoLists } from "@modules/todo-lists/schema/todo-list.schema";
+import { CommentEventsService } from "@modules/todos/CommentEventsService";
+import { resolveModule } from "@modules/core/resolveModule";
 
 describe("UserAPI", () => {
   let server: Server;
@@ -298,6 +300,31 @@ describe("UserAPI", () => {
         { listId: list.listId, userId: viewer.userId, role: "viewer" },
       ]);
       todoId = (await generateTodo(owner.userId, { listId: list.listId })).todoId;
+    });
+
+    it("should announce the placeholder of a deleted account after the deletion", async () => {
+      const events = resolveModule(CommentEventsService);
+      const parent = await generateTodoComment(todoId, gone.userId);
+      await generateTodoComment(todoId, viewer.userId, { parentCommentId: parent.commentId });
+      const sent: { event: string; data: unknown }[] = [];
+      events.subscribe(todoId, {
+        user: { id: owner.userId },
+        expiresAt: Date.now() + 60_000,
+        send: (event, data) => sent.push({ event, data }),
+        ping() {},
+        close() {},
+      });
+
+      try {
+        const response = await deleteAccount(gone);
+
+        expect(response.status).toBe(200);
+        expect(sent).toEqual([
+          { event: "comment.deleted", data: { commentId: parent.commentId, parentCommentId: null, mode: "soft" } },
+        ]);
+      } finally {
+        events.closeAll();
+      }
     });
 
     it("should keep the replies of others as a placeholder without author when an account is deleted", async () => {

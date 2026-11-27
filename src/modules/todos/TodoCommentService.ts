@@ -12,6 +12,7 @@ import { resolveModule } from "@modules/core/resolveModule";
 import { getPgConstraintName, isForeignKeyViolation, withRetryOnDeadlock } from "@/utils/dbErrors";
 import { todoListMembers, todoLists } from "@/modules/todo-lists/schema/todo-list.schema";
 import { extractMentionIds } from "./commentMentions";
+import { CommentEventsService } from "./CommentEventsService";
 
 /** the parent of a reply does not exist, belongs to another todo or is deleted */
 export class InvalidParentCommentError extends Error {
@@ -51,12 +52,18 @@ export class CommentNotFoundError extends Error {
 /** what a deletion did: soft = placeholder, hard = row gone, branch = row gone with all its replies */
 export interface CommentRemoval {
   commentId: string;
+  todoId: string;
   mode: "soft" | "hard" | "branch";
   /**
    * the removed rows: the comment itself (not for soft) and the emptied placeholders above it, not the replies in a
    * branch
    */
   removedCommentIds: string[];
+  /**
+   * what has to be announced, bottom up: the comment itself (also for soft) and every emptied placeholder above it,
+   * each with its parent
+   */
+  removedComments: { commentId: string; parentCommentId: string | null }[];
   /** branch only: the comment and its replies on all levels */
   removedCount?: number;
 }
@@ -97,10 +104,12 @@ interface PageParams {
 export class TodoCommentService extends BaseModule {
   public static instance: TodoCommentService;
   protected todoListService: TodoListService;
+  protected commentEvents: CommentEventsService;
 
   constructor() {
     super("todoComment.service", "Business logic for Todo Comment management");
     this.todoListService = resolveModule(TodoListService);
+    this.commentEvents = resolveModule(CommentEventsService);
 
     if (!TodoCommentService.instance) {
       TodoCommentService.instance = this;
@@ -300,7 +309,15 @@ export class TodoCommentService extends BaseModule {
 
     // read after the commit (the reading uses db)
     // undefined only when the comment was deleted right after it was written
-    return this.getDiscussionComment(commentId);
+    const created = await this.getDiscussionComment(commentId);
+    if (created) {
+      const parentReplyCount = created.parentCommentId ? await this.countRepliesOf(created.parentCommentId) : undefined;
+      await this.commentEvents.publish(created.todoId, {
+        name: "comment.created",
+        data: parentReplyCount === undefined ? { comment: created } : { comment: created, parentReplyCount },
+      });
+    }
+    return created;
   }
 
   /**
@@ -310,7 +327,7 @@ export class TodoCommentService extends BaseModule {
    * @throws InvalidMentionError when a newly mentioned user may not be mentioned on this todo
    */
   async updateTodoComment(commentId: string, updateData: UpdateTodoComment): Promise<DiscussionComment | undefined> {
-    const found = await withRetryOnDeadlock(() =>
+    const outcome = await withRetryOnDeadlock(() =>
       db.transaction(async (tx) => {
         // FOR UPDATE: a concurrent delete waits, so the comment cannot become a placeholder before the update
         const [current] = await tx
@@ -318,9 +335,9 @@ export class TodoCommentService extends BaseModule {
           .from(todoComments)
           .where(and(eq(todoComments.commentId, commentId), isNull(todoComments.deletedAt)))
           .for("update");
-        if (!current) return false;
+        if (!current) return "gone" as const;
         // the same text again is no edit
-        if (updateData.comment === undefined || updateData.comment === current.comment) return true;
+        if (updateData.comment === undefined || updateData.comment === current.comment) return "unchanged" as const;
 
         const oldIds = new Set(extractMentionIds(current.comment));
         const textIds = extractMentionIds(updateData.comment);
@@ -340,13 +357,17 @@ export class TodoCommentService extends BaseModule {
         const storedIds = stored.map((row) => row.userId);
         const wantedIds = textIds.filter((id) => storedIds.includes(id) || addedIds.includes(id));
         await this.replaceMentions(tx, commentId, storedIds, wantedIds);
-        return true;
+        return "changed" as const;
       }),
     ).catch(mapMentionForeignKeyError);
-    if (!found) return undefined;
+    if (outcome === "gone") return undefined;
 
     // read after the commit (the reading uses db)
-    return this.getDiscussionComment(commentId);
+    const updated = await this.getDiscussionComment(commentId);
+    if (updated && outcome === "changed") {
+      await this.commentEvents.publish(updated.todoId, { name: "comment.updated", data: { comment: updated } });
+    }
+    return updated;
   }
 
   /**
@@ -412,7 +433,9 @@ export class TodoCommentService extends BaseModule {
   async removeComment(commentId: string, tx?: DbTransaction): Promise<CommentRemoval> {
     // an own transaction is retried after a deadlock; a given one belongs to the caller, who decides on retrying
     if (!tx) {
-      return withRetryOnDeadlock(() => db.transaction((ownTx) => this.removeComment(commentId, ownTx)));
+      const removal = await withRetryOnDeadlock(() => db.transaction((ownTx) => this.removeComment(commentId, ownTx)));
+      await this.publishRemoval(removal);
+      return removal;
     }
 
     // lock order: the comment first, then its parents upwards (cleanUpEmptyPlaceholders); a reply written meanwhile
@@ -427,12 +450,24 @@ export class TodoCommentService extends BaseModule {
         .where(eq(todoComments.commentId, commentId));
       // a placeholder mentions nobody; a hard delete takes the rows with it (foreign key cascade)
       await tx.delete(todoCommentMentions).where(eq(todoCommentMentions.commentId, commentId));
-      return { commentId, mode: "soft", removedCommentIds: [] };
+      return {
+        commentId,
+        todoId: comment.todoId,
+        mode: "soft",
+        removedCommentIds: [],
+        removedComments: [{ commentId, parentCommentId: comment.parentCommentId }],
+      };
     }
 
     await tx.delete(todoComments).where(eq(todoComments.commentId, commentId));
     const cleanedUp = await this.cleanUpEmptyPlaceholders(tx, comment.parentCommentId);
-    return { commentId, mode: "hard", removedCommentIds: [commentId, ...cleanedUp] };
+    return {
+      commentId,
+      todoId: comment.todoId,
+      mode: "hard",
+      removedCommentIds: [commentId, ...cleanedUp.map((removed) => removed.commentId)],
+      removedComments: [{ commentId, parentCommentId: comment.parentCommentId }, ...cleanedUp],
+    };
   }
 
   /**
@@ -441,8 +476,9 @@ export class TodoCommentService extends BaseModule {
    * ordered by id, after user, lists and todos (lock order of the spec).
    * No skipping or error handling is needed: all rows are locked in this transaction, and the cleanup of a hard delete
    * only removes placeholders, which an own comment becomes only after it was processed itself.
+   * @returns the removals, for the caller to announce (publishRemoval) after its commit
    */
-  async removeCommentsOfUser(userId: string, tx: DbTransaction): Promise<void> {
+  async removeCommentsOfUser(userId: string, tx: DbTransaction): Promise<CommentRemoval[]> {
     const own = await tx
       .select({ commentId: todoComments.commentId })
       .from(todoComments)
@@ -450,7 +486,24 @@ export class TodoCommentService extends BaseModule {
       .orderBy(asc(todoComments.commentId))
       .for("update");
 
-    for (const { commentId } of own) await this.removeComment(commentId, tx);
+    const removals: CommentRemoval[] = [];
+    for (const { commentId } of own) removals.push(await this.removeComment(commentId, tx));
+    return removals;
+  }
+
+  /**
+   * Announces a removal to the open discussions, one event per removed comment (the comment itself, then the emptied
+   * placeholders above it). Call it only after the transaction of the removal has committed.
+   */
+  async publishRemoval(removal: CommentRemoval): Promise<void> {
+    for (const { commentId, parentCommentId } of removal.removedComments) {
+      const mode = commentId === removal.commentId ? removal.mode : "hard";
+      const data =
+        parentCommentId === null
+          ? { commentId, parentCommentId, mode }
+          : { commentId, parentCommentId, mode, parentReplyCount: await this.countRepliesOf(parentCommentId) };
+      await this.commentEvents.publish(removal.todoId, { name: "comment.deleted", data });
+    }
   }
 
   /**
@@ -459,8 +512,8 @@ export class TodoCommentService extends BaseModule {
    * @throws CommentNotFoundError when the comment does not exist (anymore)
    */
   async removeBranch(commentId: string): Promise<CommentRemoval> {
-    return withRetryOnDeadlock(() =>
-      db.transaction(async (tx) => {
+    const removal = await withRetryOnDeadlock(() =>
+      db.transaction(async (tx): Promise<CommentRemoval> => {
         const comment = await this.lockComment(tx, commentId);
         if (!comment) throw new CommentNotFoundError();
 
@@ -480,21 +533,39 @@ export class TodoCommentService extends BaseModule {
 
         await tx.delete(todoComments).where(eq(todoComments.commentId, commentId));
         const cleanedUp = await this.cleanUpEmptyPlaceholders(tx, comment.parentCommentId);
-        return { commentId, mode: "branch", removedCommentIds: [commentId, ...cleanedUp], removedCount: removed };
+        return {
+          commentId,
+          todoId: comment.todoId,
+          mode: "branch",
+          removedCommentIds: [commentId, ...cleanedUp.map((removed) => removed.commentId)],
+          removedComments: [{ commentId, parentCommentId: comment.parentCommentId }, ...cleanedUp],
+          removedCount: removed,
+        };
       }),
     );
+    await this.publishRemoval(removal);
+    return removal;
   }
 
   private async lockComment(
     tx: DbTransaction,
     commentId: string,
-  ): Promise<Pick<TodoComment, "parentCommentId" | "deletedAt"> | undefined> {
+  ): Promise<Pick<TodoComment, "todoId" | "parentCommentId" | "deletedAt"> | undefined> {
     const [comment] = await tx
-      .select({ parentCommentId: todoComments.parentCommentId, deletedAt: todoComments.deletedAt })
+      .select({ todoId: todoComments.todoId, parentCommentId: todoComments.parentCommentId, deletedAt: todoComments.deletedAt })
       .from(todoComments)
       .where(eq(todoComments.commentId, commentId))
       .for("update");
     return comment;
+  }
+
+  /** direct replies of a comment, read outside of a transaction */
+  private async countRepliesOf(commentId: string): Promise<number> {
+    const [{ replies }] = await db
+      .select({ replies: sql<number>`count(*)::int` })
+      .from(todoComments)
+      .where(eq(todoComments.parentCommentId, commentId));
+    return replies;
   }
 
   private async countReplies(tx: DbTransaction, commentId: string): Promise<number> {
@@ -508,10 +579,13 @@ export class TodoCommentService extends BaseModule {
   /**
    * Deletes the parent when it is a placeholder without replies, and so on upwards, each one locked before it is
    * looked at. A placeholder nobody answers anymore has nothing left to show.
-   * @returns the ids of the deleted placeholders, nearest first
+   * @returns the deleted placeholders with their parents, nearest first
    */
-  private async cleanUpEmptyPlaceholders(tx: DbTransaction, parentCommentId: string | null): Promise<string[]> {
-    const removed: string[] = [];
+  private async cleanUpEmptyPlaceholders(
+    tx: DbTransaction,
+    parentCommentId: string | null,
+  ): Promise<{ commentId: string; parentCommentId: string | null }[]> {
+    const removed: { commentId: string; parentCommentId: string | null }[] = [];
     let currentId = parentCommentId;
 
     while (currentId) {
@@ -519,7 +593,7 @@ export class TodoCommentService extends BaseModule {
       if (!parent || parent.deletedAt === null || (await this.countReplies(tx, currentId)) > 0) break;
 
       await tx.delete(todoComments).where(eq(todoComments.commentId, currentId));
-      removed.push(currentId);
+      removed.push({ commentId: currentId, parentCommentId: parent.parentCommentId });
       currentId = parent.parentCommentId;
     }
 
