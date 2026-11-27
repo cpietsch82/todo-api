@@ -234,7 +234,7 @@ export function requireTodoCommentOwnership(
   return createOwnershipMiddleware(
     async (req) => {
       const todoComment = await todoCommentService.getTodoCommentById(req.params.commentId as string);
-      return todoComment?.userId;
+      return todoComment?.userId ?? undefined;
     },
     "You are not allowed to access this todo comment",
   );

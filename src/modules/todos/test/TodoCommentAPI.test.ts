@@ -203,6 +203,37 @@ describe("TodoCommentAPI", () => {
       expect(response.status).toBe(400);
       expect(response.body.status).toBe("error");
     });
+
+    const post = async (comment: string) =>
+      request(server)
+        .post("/api/todo-comments")
+        .set("Content-Type", "application/json")
+        .set(await createAuthHeader(testUser))
+        .send({ commentRecord: { todoId: testTodo.todoId, comment } });
+
+    it("should reject a comment longer than 2000 characters", async () => {
+      const response = await post("x".repeat(2001));
+      expect(response.status).toBe(400);
+    });
+
+    it("should accept a comment of exactly 2000 characters", async () => {
+      const response = await post("x".repeat(2000));
+      expect(response.status).toBe(201);
+    });
+
+    it("should store a placeholder without text and author", async () => {
+      const [placeholder] = await db
+        .insert(todoComments)
+        .values({ todoId: testTodo.todoId, userId: null, comment: null, deletedAt: new Date() })
+        .returning();
+      expect(placeholder.deletedAt).toBeInstanceOf(Date);
+    });
+
+    it("should not store a comment without text unless it is deleted", async () => {
+      await expect(
+        db.insert(todoComments).values({ todoId: testTodo.todoId, userId: testUser.userId, comment: null }),
+      ).rejects.toThrow();
+    });
   });
 
   // ---------------------------------------------------------------------------

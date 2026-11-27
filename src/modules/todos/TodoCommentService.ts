@@ -67,8 +67,9 @@ export class TodoCommentService extends BaseModule {
       .where(eq(todoComments.todoId, todoId))
       .orderBy(asc(todoComments.createdAt), asc(todoComments.commentId));
 
-    return rows.map(({ authorId, authorUsername, ...comment }) => ({
-      ...comment,
+    return rows.map(({ authorId, authorUsername, comment, ...rest }) => ({
+      ...rest,
+      comment: comment ?? "",
       author: { userId: authorId, username: authorUsername },
     }));
   }
