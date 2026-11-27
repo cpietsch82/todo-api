@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
 import request from "supertest";
 import type { Server } from "node:http";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import type { Todo, User } from "@/db/schema";
 import { todoListMembers, todoLists, type TodoList } from "@modules/todo-lists/schema/todo-list.schema";
@@ -117,6 +117,58 @@ describe("Pages of the discussion of a todo", () => {
         edited: false,
       });
       expect(response.body.total).toBe(2);
+    });
+
+    it("should page comments that differ by one microsecond within the same millisecond", async () => {
+      const [a, b] = await db
+        .insert(todoComments)
+        .values([
+          {
+            todoId: todo.todoId,
+            userId: owner.userId,
+            comment: "a",
+            createdAt: sql`'2026-11-27 10:00:00.123456'::timestamp`,
+          },
+          {
+            todoId: todo.todoId,
+            userId: owner.userId,
+            comment: "b",
+            createdAt: sql`'2026-11-27 10:00:00.123457'::timestamp`,
+          },
+        ])
+        .returning();
+
+      const seen = await collectAllPages(viewer, todo.todoId, 1);
+
+      // collected newest page first
+      expect(seen).toEqual([b.commentId, a.commentId]);
+    });
+
+    it("should ignore placeholders in total and lastCommentAt", async () => {
+      await db.insert(todoComments).values({
+        todoId: todo.todoId,
+        userId: owner.userId,
+        comment: "live",
+        createdAt: new Date("2026-11-27T10:00:00Z"),
+      });
+      await placeholder(todo.todoId, { createdAt: new Date("2026-11-27T11:00:00Z") });
+
+      const response = await get(viewer, todo.todoId);
+
+      expect(response.body.items).toHaveLength(2);
+      expect(response.body.total).toBe(1);
+      expect(response.body.lastCommentAt).toBe("2026-11-27T10:00:00.000Z");
+    });
+
+    it("should not reveal that a deleted comment had been edited", async () => {
+      await placeholder(todo.todoId, {
+        createdAt: new Date("2026-11-27T10:00:00Z"),
+        updatedAt: new Date("2026-11-27T11:00:00Z"),
+      });
+
+      const response = await get(viewer, todo.todoId);
+
+      expect(response.body.items[0]).toMatchObject({ deleted: true, edited: false });
     });
 
     it("should answer 400 for a well-formed cursor with an impossible date", async () => {
@@ -256,6 +308,35 @@ describe("Pages of the discussion of a todo", () => {
       expect((await patch(admin, parent.commentId, "x", "admin")).status).toBe(404);
     });
 
+    it("should answer 403 to a stranger for a placeholder, like for a live comment", async () => {
+      const stranger = await generateUser();
+      const parent = await placeholder(todo.todoId);
+      expect((await patch(stranger, parent.commentId, "x")).status).toBe(403);
+    });
+
+    it("should reject empty updates with 400", async () => {
+      const own = await generateTodoComment(todo.todoId, editor.userId);
+      const response = await request(server)
+        .patch(`/api/todo-comments/${own.commentId}`)
+        .set(await createAuthHeader(editor))
+        .send({ updates: {} });
+      expect(response.status).toBe(400);
+    });
+
+    it("should not mark the comment as edited when the same text is sent again", async () => {
+      const past = new Date(Date.now() - 60_000);
+      const [existing] = await db
+        .insert(todoComments)
+        .values({ todoId: todo.todoId, userId: editor.userId, comment: "gleich", createdAt: past, updatedAt: past })
+        .returning();
+
+      const response = await patch(editor, existing.commentId, "gleich");
+
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({ comment: "gleich", edited: false });
+      expect((await commentById(existing.commentId)).updatedAt).toEqual(past);
+    });
+
     it("should not write text back into a placeholder when the service is asked to update it", async () => {
       const parent = await placeholder(todo.todoId);
 
@@ -330,6 +411,17 @@ describe("Pages of the discussion of a todo", () => {
       const response = await remove(owner, parent.commentId);
 
       expect(response.status).toBe(404);
+      expect(await commentById(parent.commentId)).toBeDefined();
+    });
+
+    it("should answer 403 to a stranger for a plain delete of a placeholder", async () => {
+      const stranger = await generateUser();
+      const parent = await placeholder(todo.todoId);
+      await generateTodoComment(todo.todoId, viewer.userId, { parentCommentId: parent.commentId });
+
+      const response = await remove(stranger, parent.commentId);
+
+      expect(response.status).toBe(403);
       expect(await commentById(parent.commentId)).toBeDefined();
     });
 

@@ -74,6 +74,7 @@ export const todoCommentByIdSchema = z.object({
   commentId: z.uuid("Invalid CommentId"),
 });
 
+// the text is the only editable field, so it is required: an empty update would only mark the comment as edited
 export const updateTodoCommentSchema = z.object({
   updates: InsertTodoCommentSchema.omit({
     commentId: true,
@@ -83,7 +84,7 @@ export const updateTodoCommentSchema = z.object({
     deletedAt: true,
     createdAt: true,
     updatedAt: true,
-  }).partial(),
+  }),
 });
 
 export const commentPageQuerySchema = z.object({

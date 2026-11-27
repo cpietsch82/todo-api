@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-/** position in the discussion: createdAt is the text of created_at::text (microseconds), a JS Date would lose them */
+/** position in the discussion: createdAt is the text of created_at (to_char, always six digits of microseconds), a JS Date would lose them */
 export interface CommentCursor {
   createdAt: string;
   commentId: string;

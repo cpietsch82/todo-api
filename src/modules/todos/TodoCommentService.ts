@@ -146,7 +146,10 @@ export class TodoCommentService extends BaseModule {
         updatedAt: todoComments.updatedAt,
         deletedAt: todoComments.deletedAt,
         // the text keeps the microseconds, which a JS Date would lose
-        createdAtText: sql<string>`${todoComments.createdAt}::text`,
+        // independent of the DateStyle of the server, always six digits of fraction
+        createdAtText: sql<string>`to_char(${todoComments.createdAt}, 'YYYY-MM-DD HH24:MI:SS.US')`,
+        // the alias is required: without it the correlated reference binds to the inner table and the count is always
+        // 0 (Drizzle's alias() produced invalid SQL here)
         replyCount: sql<number>`(SELECT count(*) FROM todo_comments AS replies WHERE replies.parent_comment_id = ${todoComments.commentId})::int`,
         authorId: users.userId,
         authorUsername: users.username,
@@ -172,7 +175,8 @@ export class TodoCommentService extends BaseModule {
         comment: deleted ? null : row.comment,
         createdAt: row.createdAt,
         updatedAt: row.updatedAt,
-        edited: row.updatedAt > row.createdAt,
+        // a placeholder does not reveal that the deleted comment had been edited
+        edited: !deleted && row.updatedAt > row.createdAt,
         deleted,
         replyCount: row.replyCount,
         author:
@@ -248,6 +252,16 @@ export class TodoCommentService extends BaseModule {
 
   /** undefined when the comment is gone or a placeholder (deleted meanwhile): its text must not come back */
   async updateTodoComment(commentId: string, updateData: UpdateTodoComment): Promise<DiscussionComment | undefined> {
+    const [current] = await db
+      .select({ comment: todoComments.comment })
+      .from(todoComments)
+      .where(and(eq(todoComments.commentId, commentId), isNull(todoComments.deletedAt)));
+    if (!current) return undefined;
+    // the same text again is no edit
+    if (updateData.comment === undefined || updateData.comment === current.comment) {
+      return this.getDiscussionComment(commentId);
+    }
+
     const updated = await db
       .update(todoComments)
       .set({ ...updateData, updatedAt: new Date() })

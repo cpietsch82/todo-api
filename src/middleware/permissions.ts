@@ -259,8 +259,19 @@ function createTodoCommentCheck(
 
     const comment = await todoCommentService.getTodoCommentById(req.params.commentId as string);
     const todo = comment ? await todoService.getTodoById(comment.todoId) : undefined;
-    // a placeholder is no comment anymore: 404 before the rights are looked at
-    if (!comment || !todo || (comment.deletedAt !== null && !options.allowDeleted)) {
+    if (!comment || !todo) {
+      res.respondNotFound();
+      return;
+    }
+
+    // a placeholder has no author anymore, so the rights of a comment cannot apply: whoever sees the todo gets the 404
+    // below, a stranger the 403 of every foreign resource
+    const placeholderOnly = comment.deletedAt !== null && !options.allowDeleted;
+    if (placeholderOnly) {
+      if (!(await todoService.canAccessTodo(todo, user))) {
+        res.respondAuthorizationInsufficient(reason, true);
+        return;
+      }
       res.respondNotFound();
       return;
     }
