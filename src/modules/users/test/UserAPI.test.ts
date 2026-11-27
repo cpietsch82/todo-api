@@ -4,7 +4,7 @@ import type { Server } from "node:http";
 import { UserAPI } from "@modules/users/UserAPI";
 import UserService from "@modules/users/UserService";
 import { User } from "@/db/schema";
-import { createAuthHeader, generateUser, NON_EXISTENT_UUID } from "@tests/test.helpers";
+import { createAuthHeader, generateTodo, generateTodoComment, generateUser, NON_EXISTENT_UUID } from "@tests/test.helpers";
 import { getTestServer } from "@tests/integration.setup";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
@@ -12,7 +12,6 @@ import { TodoAPI } from "@modules/todos/TodoAPI";
 import { TodoCommentAPI } from "@modules/todos/TodoCommentAPI";
 import { todoComments } from "@modules/todos/schema/todo.comment.schema";
 import { todoListMembers, todoLists } from "@modules/todo-lists/schema/todo-list.schema";
-import { generateTodo, generateTodoComment } from "@tests/test.helpers";
 
 describe("UserAPI", () => {
   let server: Server;
@@ -20,6 +19,8 @@ describe("UserAPI", () => {
 
   beforeAll(async () => {
     new UserAPI();
+    new TodoAPI();
+    new TodoCommentAPI();
     server = getTestServer();
   });
 
@@ -288,8 +289,6 @@ describe("UserAPI", () => {
       request(server).delete(`/api/users/${user.userId}`).set(await createAuthHeader(user));
 
     beforeEach(async () => {
-      new TodoAPI();
-      new TodoCommentAPI();
       owner = await generateUser({ email: "owner@test.com", username: "ownerx" });
       gone = await generateUser({ email: "gone@test.com", username: "gonex" });
       viewer = await generateUser({ email: "viewer@test.com", username: "viewerx" });
@@ -312,7 +311,7 @@ describe("UserAPI", () => {
       expect(await commentById(reply.commentId)).toMatchObject({ comment: reply.comment });
     });
 
-    it("should delete comments without replies of a deleted account completely", async () => {
+    it("should delete comments without replies of a deleted account completely, also on a todo of someone else", async () => {
       const own = await generateTodoComment(todoId, gone.userId);
 
       const response = await deleteAccount(gone);
@@ -321,25 +320,23 @@ describe("UserAPI", () => {
       expect(await commentById(own.commentId)).toBeUndefined();
     });
 
-    it("should delete the account of a user whose live comment without replies is on a todo of someone else", async () => {
-      const own = await generateTodoComment(todoId, gone.userId);
-      await generateTodoComment(todoId, viewer.userId);
+    const ROOT_ID = "00000000-0000-4000-8000-000000000001";
+    const CHILD_ID = "00000000-0000-4000-8000-000000000002";
+
+    it.each([
+      ["root first", ROOT_ID, CHILD_ID],
+      ["child first", CHILD_ID, ROOT_ID],
+    ])("should remove a chain of own comments completely when the order by id is %s", async (_name, rootId, childId) => {
+      await db.insert(todoComments).values([
+        { commentId: rootId, todoId, userId: gone.userId, comment: "root" },
+        { commentId: childId, todoId, userId: gone.userId, comment: "child", parentCommentId: rootId },
+      ]);
 
       const response = await deleteAccount(gone);
 
       expect(response.status).toBe(200);
-      expect(await commentById(own.commentId)).toBeUndefined();
-    });
-
-    it("should cope with a chain of own comments where a cleanup removes a later one", async () => {
-      const root = await generateTodoComment(todoId, gone.userId);
-      const child = await generateTodoComment(todoId, gone.userId, { parentCommentId: root.commentId });
-
-      const response = await deleteAccount(gone);
-
-      expect(response.status).toBe(200);
-      expect(await commentById(root.commentId)).toBeUndefined();
-      expect(await commentById(child.commentId)).toBeUndefined();
+      expect(await commentById(rootId)).toBeUndefined();
+      expect(await commentById(childId)).toBeUndefined();
     });
 
     it("should show the placeholder of a deleted account without author and let a moderator remove it as a thread", async () => {

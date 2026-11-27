@@ -292,6 +292,8 @@ export class TodoCommentService extends BaseModule {
    * Removes all live comments of a user by the placeholder rule (for the deletion of an account), so that replies of
    * others survive below a placeholder without author. Runs in the transaction of the caller and locks the comments
    * ordered by id, after user, lists and todos (lock order of the spec).
+   * No skipping or error handling is needed: all rows are locked in this transaction, and the cleanup of a hard delete
+   * only removes placeholders, which an own comment becomes only after it was processed itself.
    */
   async removeCommentsOfUser(userId: string, tx: DbTransaction): Promise<void> {
     const own = await tx
@@ -301,18 +303,7 @@ export class TodoCommentService extends BaseModule {
       .orderBy(asc(todoComments.commentId))
       .for("update");
 
-    // the cleanup of an earlier hard delete can remove a later comment of the list
-    const alreadyRemoved = new Set<string>();
-    for (const { commentId } of own) {
-      if (alreadyRemoved.has(commentId)) continue;
-      try {
-        const removal = await this.removeComment(commentId, tx);
-        removal.removedCommentIds.forEach((id) => alreadyRemoved.add(id));
-      } catch (error) {
-        // gone meanwhile: nothing left to do for this comment
-        if (!(error instanceof CommentNotFoundError)) throw error;
-      }
-    }
+    for (const { commentId } of own) await this.removeComment(commentId, tx);
   }
 
   /**
