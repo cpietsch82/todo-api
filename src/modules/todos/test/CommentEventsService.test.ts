@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import type { Todo, User } from "@/db/schema";
@@ -12,6 +12,7 @@ interface FakeStream extends CommentStream {
   sent: { event: string; data: unknown }[];
   pings: number;
   closed: boolean;
+  closes: number;
 }
 
 function fakeStream(user: User, options: { expiresAt?: number; throwOnSend?: boolean } = {}): FakeStream {
@@ -21,6 +22,7 @@ function fakeStream(user: User, options: { expiresAt?: number; throwOnSend?: boo
     sent: [],
     pings: 0,
     closed: false,
+    closes: 0,
     send(event, data) {
       if (options.throwOnSend) throw new Error("socket gone");
       stream.sent.push({ event, data });
@@ -29,6 +31,7 @@ function fakeStream(user: User, options: { expiresAt?: number; throwOnSend?: boo
       stream.pings++;
     },
     close() {
+      stream.closes++;
       stream.closed = true;
     },
   };
@@ -139,6 +142,7 @@ describe("CommentEventsService", () => {
   });
 
   it("should keep serving the others when sending to one stream throws", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
     const broken = fakeStream(owner, { throwOnSend: true });
     const healthy = fakeStream(owner);
     service.subscribe(todo.todoId, broken);
@@ -150,6 +154,8 @@ describe("CommentEventsService", () => {
     expect(healthy.sent).toHaveLength(1);
     expect(healthy.closed).toBe(false);
     expect(service.countStreams()).toBe(1);
+    expect(error).toHaveBeenCalledTimes(1);
+    error.mockRestore();
   });
 
   it("should close every stream on closeAll", () => {
@@ -160,5 +166,32 @@ describe("CommentEventsService", () => {
 
     expect(streams.every((stream) => stream.closed)).toBe(true);
     expect(service.countStreams()).toBe(0);
+  });
+
+  it("should close a stream once when it is evicted while a publish is in flight", async () => {
+    const streams = Array.from({ length: 5 }, () => fakeStream(owner, { expiresAt: Date.now() - 1 }));
+    streams.forEach((stream) => service.subscribe(todo.todoId, stream));
+
+    const publishing = service.publish(todo.todoId, event);
+    service.subscribe(todo.todoId, fakeStream(owner)); // evicts streams[0] while the todo loads
+    await publishing;
+
+    expect(streams[0].closes).toBe(1);
+  });
+
+  it("should not reject and keep the streams open when loading the todo fails", async () => {
+    const stream = fakeStream(owner);
+    service.subscribe(todo.todoId, stream);
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const load = vi.spyOn(service["todoService"], "getTodoById").mockRejectedValueOnce(new Error("db down"));
+
+    await expect(service.publish(todo.todoId, event)).resolves.toBeUndefined();
+
+    expect(stream.sent).toEqual([]);
+    expect(stream.closed).toBe(false);
+    expect(service.countStreams()).toBe(1);
+    expect(error).toHaveBeenCalled();
+    load.mockRestore();
+    error.mockRestore();
   });
 });

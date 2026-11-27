@@ -91,7 +91,14 @@ export class CommentEventsService extends BaseModule {
     const targets = this.subscriptions.filter((entry) => entry.todoId === todoId);
     if (targets.length === 0) return;
 
-    const todo = await this.todoService.getTodoById(todoId);
+    let todo: Awaited<ReturnType<TodoService["getTodoById"]>>;
+    try {
+      todo = await this.todoService.getTodoById(todoId);
+    } catch (error) {
+      // transient: keep the streams, the next heartbeat tries again
+      console.error("comment events: loading the todo failed", error);
+      return;
+    }
     for (const subscription of targets) {
       if (!this.subscriptions.includes(subscription)) continue; // gone while the todo was loading
       try {
@@ -105,19 +112,23 @@ export class CommentEventsService extends BaseModule {
         }
         // the access check is async: the connection may have been closed meanwhile
         if (this.subscriptions.includes(subscription)) action(subscription.stream);
-      } catch {
+      } catch (error) {
+        console.error("comment events: delivering to a stream failed", error);
         this.drop(subscription);
       }
     }
   }
 
-  private remove(subscription: Subscription): void {
+  private remove(subscription: Subscription): boolean {
     const index = this.subscriptions.indexOf(subscription);
-    if (index !== -1) this.subscriptions.splice(index, 1);
+    if (index === -1) return false;
+    this.subscriptions.splice(index, 1);
+    return true;
   }
 
+  /** closes the stream only if this call removed it, so concurrent paths never close twice */
   private drop(subscription: Subscription): void {
-    this.remove(subscription);
+    if (!this.remove(subscription)) return;
     try {
       subscription.stream.close();
     } catch {
