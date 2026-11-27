@@ -186,8 +186,13 @@ export class ExpressAPI extends BaseModule {
     this.app.use(httpLogger);
     // rate limiting
     this.app.use("/api/", createApiRateLimiter());
-    // response compression
-    this.app.use(compression());
+    // response compression, a server-sent event stream must not be buffered by it
+    this.app.use(
+      compression({
+        filter: (req, res) =>
+          !String(res.getHeader("Content-Type") ?? "").startsWith("text/event-stream") && compression.filter(req, res),
+      }),
+    );
     // body parsing, only json is accepted
     this.app.use(express.json({ limit: BODY_LIMIT }));
 

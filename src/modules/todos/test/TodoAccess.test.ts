@@ -49,7 +49,7 @@ describe("todo access and discussion", () => {
     });
   });
 
-  describe("TodoCommentService.getCommentsForTodo", () => {
+  describe("TodoCommentService.getDiscussionPage", () => {
     it("should return the comments of all users on the todo, oldest first, with the author", async () => {
       // written in a different order than created, so the test shows the order comes from createdAt
       await db.insert(todoComments).values([
@@ -58,7 +58,7 @@ describe("todo access and discussion", () => {
         { todoId: todo.todoId, userId: other.userId, comment: "second", createdAt: new Date("2026-11-18T10:05:00Z") },
       ]);
 
-      const discussion = await commentService.getCommentsForTodo(todo.todoId);
+      const { items: discussion } = await commentService.getDiscussionPage(todo.todoId, { limit: 20 });
 
       expect(discussion.map((comment) => comment.comment)).toEqual(["first", "second", "third"]);
       expect(discussion[1].author).toEqual({ userId: other.userId, username: other.username });
@@ -68,15 +68,17 @@ describe("todo access and discussion", () => {
       const otherTodo = await generateTodo(other.userId);
       await generateTodoComment(otherTodo.todoId, other.userId, { comment: "elsewhere" });
 
-      expect(await commentService.getCommentsForTodo(todo.todoId)).toEqual([]);
+      expect((await commentService.getDiscussionPage(todo.todoId, { limit: 20 })).items).toEqual([]);
     });
 
     it("should not return private fields of the author", async () => {
       await generateTodoComment(todo.todoId, other.userId);
 
-      const [comment] = await commentService.getCommentsForTodo(todo.todoId);
+      const {
+        items: [comment],
+      } = await commentService.getDiscussionPage(todo.todoId, { limit: 20 });
 
-      expect(Object.keys(comment.author)).toEqual(["userId", "username"]);
+      expect(Object.keys(comment.author!)).toEqual(["userId", "username"]);
       expect(JSON.stringify(comment)).not.toContain(other.email);
     });
   });

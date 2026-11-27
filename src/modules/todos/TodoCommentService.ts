@@ -1,32 +1,118 @@
 import { db } from "@/db";
 import { BaseModule } from "../core/BaseModule";
-import { NewTodoComment, TodoComment, todoComments, UpdateTodoComment } from "./schema/todo.comment.schema";
-import type { Todo } from "./schema/todo.schema";
+import { NewTodoComment, TodoComment, todoCommentMentions, todoComments, UpdateTodoComment } from "./schema/todo.comment.schema";
+import { type Todo, todos } from "./schema/todo.schema";
+import { and, asc, desc, eq, inArray, isNull, sql, type SQL } from "drizzle-orm";
 import { users } from "@/modules/users/schema/user.schema";
-import { asc, desc, eq } from "drizzle-orm";
+import { type CommentCursor, encodeCommentCursor } from "./commentCursor";
 import { hasPermission } from "@/modules/authorization/permissions";
 import type { AccessingUser } from "./TodoService";
-import { TodoListService } from "@/modules/todo-lists/TodoListService";
+import { TodoListService, type DbTransaction } from "@/modules/todo-lists/TodoListService";
 import { resolveModule } from "@modules/core/resolveModule";
+import { getPgConstraintName, isForeignKeyViolation, withRetryOnDeadlock } from "@/utils/dbErrors";
+import { todoListMembers, todoLists } from "@/modules/todo-lists/schema/todo-list.schema";
+import { extractMentionIds } from "./commentMentions";
+import { CommentEventsService, type CommentEvent } from "./CommentEventsService";
 
-/** a comment as part of the discussion of a todo, with the author, so the others see who wrote it */
-export interface TodoDiscussionComment {
+/** reads run on the pool or inside a transaction */
+type DbExecutor = typeof db | DbTransaction;
+
+/** the parent of a reply does not exist, belongs to another todo or is deleted */
+export class InvalidParentCommentError extends Error {
+  constructor() {
+    super("Invalid parent comment");
+    this.name = "InvalidParentCommentError";
+  }
+}
+
+/** a mentioned user is neither owner nor member of the list of the todo, or the todo is in no list */
+export class InvalidMentionError extends Error {
+  constructor() {
+    super("Invalid mention");
+    this.name = "InvalidMentionError";
+  }
+}
+
+const MENTION_USER_FK = "todo_comment_mentions_user_id_users_user_id_fk";
+
+/**
+ * A mentioned account that is deleted between the check and the insert violates the foreign key of the mention row.
+ * That is an invalid mention, not a server error; every other error is rethrown unchanged.
+ */
+export function mapMentionForeignKeyError(error: unknown): never {
+  if (isForeignKeyViolation(error) && getPgConstraintName(error) === MENTION_USER_FK) throw new InvalidMentionError();
+  throw error;
+}
+
+/** the comment to remove does not exist (anymore), or is already a placeholder where only a whole thread may go */
+export class CommentNotFoundError extends Error {
+  constructor() {
+    super("Comment not found");
+    this.name = "CommentNotFoundError";
+  }
+}
+
+/** what a deletion did: soft = placeholder, hard = row gone, branch = row gone with all its replies */
+export interface CommentRemoval {
   commentId: string;
   todoId: string;
-  comment: string;
+  mode: "soft" | "hard" | "branch";
+  /**
+   * the removed rows: the comment itself (not for soft) and the emptied placeholders above it, not the replies in a
+   * branch
+   */
+  removedCommentIds: string[];
+  /**
+   * what has to be announced, bottom up: the comment itself (also for soft) and every emptied placeholder above it,
+   * each with its parent
+   */
+  removedComments: { commentId: string; parentCommentId: string | null }[];
+  /** branch only: the comment and its replies on all levels */
+  removedCount?: number;
+}
+
+/** a comment in the discussion of a todo; deleted ones stay as placeholders, without text and author */
+export interface DiscussionComment {
+  commentId: string;
+  todoId: string;
+  parentCommentId: string | null;
+  comment: string | null;
   createdAt: Date;
   updatedAt: Date;
+  edited: boolean;
+  deleted: boolean;
+  /** direct replies, including placeholders */
+  replyCount: number;
   /** only public fields of the author, no e-mail */
-  author: { userId: string; username: string };
+  author: { userId: string; username: string } | null;
+  /** the members mentioned in the text, with their current username; empty for a placeholder */
+  mentions: { userId: string; username: string }[];
+}
+
+export interface CommentPage {
+  items: DiscussionComment[];
+  nextCursor: string | null;
+  total: number;
+}
+
+export interface DiscussionPage extends CommentPage {
+  lastCommentAt: Date | null;
+}
+
+interface PageParams {
+  limit: number;
+  before?: CommentCursor;
 }
 
 export class TodoCommentService extends BaseModule {
   public static instance: TodoCommentService;
   protected todoListService: TodoListService;
+  protected commentEvents: CommentEventsService;
 
   constructor() {
     super("todoComment.service", "Business logic for Todo Comment management");
     this.todoListService = resolveModule(TodoListService);
+    this.commentEvents = resolveModule(CommentEventsService);
 
     if (!TodoCommentService.instance) {
       TodoCommentService.instance = this;
@@ -48,66 +134,496 @@ export class TodoCommentService extends BaseModule {
   }
 
   /**
-   * The discussion of a todo: the comments of all users, oldest first, so it reads like a conversation.
+   * The newest top-level comments of a todo, oldest first, so it reads like a conversation. total and lastCommentAt
+   * count the comments of all levels without the deleted ones.
    * The caller has to check first that the user may see the todo (requireTodoAccess).
    */
-  async getCommentsForTodo(todoId: string): Promise<TodoDiscussionComment[]> {
-    const rows = await db
+  async getDiscussionPage(todoId: string, page: PageParams): Promise<DiscussionPage> {
+    const { items, nextCursor } = await this.queryCommentPage(
+      and(eq(todoComments.todoId, todoId), isNull(todoComments.parentCommentId))!,
+      page,
+    );
+    const [stats] = await db
+      .select({
+        total: sql<number>`count(*)::int`,
+        // mapped like the timestamp column, otherwise the raw text would be read in the local time zone
+        lastCommentAt: sql<Date | null>`max(${todoComments.createdAt})`.mapWith((value: string | null) =>
+          value === null ? null : (todoComments.createdAt.mapFromDriverValue(value) as Date),
+        ),
+      })
+      .from(todoComments)
+      .where(and(eq(todoComments.todoId, todoId), isNull(todoComments.deletedAt)));
+
+    return { items, nextCursor, total: stats.total, lastCommentAt: stats.lastCommentAt };
+  }
+
+  /** with a transaction the comment is read inside it, so a write and the reading of its result fail together */
+  async getDiscussionComment(commentId: string, executor: DbExecutor = db): Promise<DiscussionComment | undefined> {
+    const { items } = await this.queryCommentPage(eq(todoComments.commentId, commentId), { limit: 1 }, executor);
+    return items[0];
+  }
+
+  /** newest first by (created_at, comment_id), one more than limit to know whether there are older ones */
+  private async queryCommentPage(
+    where: SQL,
+    page: PageParams,
+    executor: DbExecutor = db,
+  ): Promise<{ items: DiscussionComment[]; nextCursor: string | null }> {
+    const olderThanCursor = page.before
+      ? sql`(${todoComments.createdAt}, ${todoComments.commentId}) < (${page.before.createdAt}::timestamp, ${page.before.commentId}::uuid)`
+      : undefined;
+
+    const rows = await executor
       .select({
         commentId: todoComments.commentId,
         todoId: todoComments.todoId,
+        parentCommentId: todoComments.parentCommentId,
         comment: todoComments.comment,
         createdAt: todoComments.createdAt,
         updatedAt: todoComments.updatedAt,
+        deletedAt: todoComments.deletedAt,
+        // the text keeps the microseconds, which a JS Date would lose
+        // independent of the DateStyle of the server, always six digits of fraction
+        createdAtText: sql<string>`to_char(${todoComments.createdAt}, 'YYYY-MM-DD HH24:MI:SS.US')`,
+        // the alias is required: without it the correlated reference binds to the inner table and the count is always
+        // 0 (Drizzle's alias() produced invalid SQL here)
+        replyCount: sql<number>`(SELECT count(*) FROM todo_comments AS replies WHERE replies.parent_comment_id = ${todoComments.commentId})::int`,
         authorId: users.userId,
         authorUsername: users.username,
       })
       .from(todoComments)
-      .innerJoin(users, eq(todoComments.userId, users.userId))
-      .where(eq(todoComments.todoId, todoId))
-      .orderBy(asc(todoComments.createdAt), asc(todoComments.commentId));
+      .leftJoin(users, eq(todoComments.userId, users.userId))
+      .where(and(where, olderThanCursor))
+      .orderBy(desc(todoComments.createdAt), desc(todoComments.commentId))
+      .limit(page.limit + 1);
 
-    return rows.map(({ authorId, authorUsername, ...comment }) => ({
-      ...comment,
-      author: { userId: authorId, username: authorUsername },
-    }));
+    const hasMore = rows.length > page.limit;
+    const kept = hasMore ? rows.slice(0, page.limit) : rows;
+    const oldest = kept[kept.length - 1];
+    const nextCursor =
+      hasMore && oldest ? encodeCommentCursor({ createdAt: oldest.createdAtText, commentId: oldest.commentId }) : null;
+
+    const mentionsByComment = await this.loadMentions(
+      kept.filter((row) => row.deletedAt === null).map((row) => row.commentId),
+      executor,
+    );
+
+    const items = kept.map((row): DiscussionComment => {
+      const deleted = row.deletedAt !== null;
+      return {
+        commentId: row.commentId,
+        todoId: row.todoId,
+        parentCommentId: row.parentCommentId,
+        comment: deleted ? null : row.comment,
+        createdAt: row.createdAt,
+        updatedAt: row.updatedAt,
+        // a placeholder does not reveal that the deleted comment had been edited
+        edited: !deleted && row.updatedAt > row.createdAt,
+        deleted,
+        replyCount: row.replyCount,
+        author:
+          deleted || row.authorId === null ? null : { userId: row.authorId, username: row.authorUsername! },
+        mentions: deleted ? [] : (mentionsByComment.get(row.commentId) ?? []),
+      };
+    });
+
+    return { items: items.reverse(), nextCursor };
+  }
+
+  /** the mentions of all given comments in one query, sorted by username; no query without comments */
+  private async loadMentions(
+    commentIds: string[],
+    executor: DbExecutor = db,
+  ): Promise<Map<string, { userId: string; username: string }[]>> {
+    const byComment = new Map<string, { userId: string; username: string }[]>();
+    if (commentIds.length === 0) return byComment;
+
+    const rows = await executor
+      .select({ commentId: todoCommentMentions.commentId, userId: users.userId, username: users.username })
+      .from(todoCommentMentions)
+      .innerJoin(users, eq(todoCommentMentions.userId, users.userId))
+      .where(inArray(todoCommentMentions.commentId, commentIds))
+      .orderBy(asc(users.username), asc(users.userId));
+
+    for (const { commentId, userId, username } of rows) {
+      const list = byComment.get(commentId) ?? [];
+      list.push({ userId, username });
+      byComment.set(commentId, list);
+    }
+    return byComment;
   }
 
   /**
-   * Who may remove a comment from a discussion: its author, an admin, and whoever moderates the discussion: the owner
-   * of the list for a todo in a list, the creator for a todo without list. Changing the text stays with the author,
-   * nobody should be able to put words into someone else's mouth.
+   * Who moderates the discussion of a todo: an admin, the owner of the list for a todo in a list, the creator for a
+   * todo without list. Only they may remove a whole thread, with the replies of others.
    */
-  async canDeleteComment(
-    comment: Pick<TodoComment, "userId">,
-    todo: Pick<Todo, "userId" | "listId">,
-    user: AccessingUser,
-  ): Promise<boolean> {
-    if (hasPermission(user.permissions, "admin:all") || comment.userId === user.id) return true;
+  async canModerateComment(todo: Pick<Todo, "userId" | "listId">, user: AccessingUser): Promise<boolean> {
+    if (hasPermission(user.permissions, "admin:all")) return true;
     if (!todo.listId) return todo.userId === user.id;
 
     const list = await this.todoListService.getListById(todo.listId);
     return list !== undefined && (await this.todoListService.getListRole(list, user)) === "owner";
   }
 
-  async createTodoComment(data: NewTodoComment): Promise<TodoComment> {
-    const [todoComment] = await db.insert(todoComments).values(data).returning();
-    return todoComment;
+  /**
+   * Who may remove a comment from a discussion (placeholder rule): its author and whoever moderates the discussion.
+   * Changing the text stays with the author, nobody should be able to put words into someone else's mouth.
+   */
+  async canDeleteComment(
+    comment: Pick<TodoComment, "userId">,
+    todo: Pick<Todo, "userId" | "listId">,
+    user: AccessingUser,
+  ): Promise<boolean> {
+    return comment.userId === user.id || this.canModerateComment(todo, user);
   }
 
-  async updateTodoComment(commentId: string, updateData: UpdateTodoComment): Promise<TodoComment> {
-    const [todoComment] = await db
-      .update(todoComments)
-      .set(updateData)
+  /** direct replies of a comment, also below a placeholder; total counts the direct replies */
+  async getRepliesPage(commentId: string, page: PageParams): Promise<CommentPage> {
+    const { items, nextCursor } = await this.queryCommentPage(eq(todoComments.parentCommentId, commentId), page);
+    const [{ total }] = await db
+      .select({ total: sql<number>`count(*)::int` })
+      .from(todoComments)
+      .where(eq(todoComments.parentCommentId, commentId));
+    return { items, nextCursor, total };
+  }
+
+  /**
+   * Writes a comment with its mentions in one transaction.
+   * @throws InvalidParentCommentError when the parent does not exist, belongs to another todo or is a placeholder
+   * @throws InvalidMentionError when a mentioned user may not be mentioned on this todo
+   */
+  async createTodoComment(data: NewTodoComment): Promise<DiscussionComment | undefined> {
+    const mentionIds = extractMentionIds(data.comment ?? null);
+
+    const created = await withRetryOnDeadlock(() =>
+      db.transaction(async (tx) => {
+        if (data.parentCommentId) {
+          // FOR SHARE: a concurrent delete of the parent (soft or hard) waits until the reply is in
+          const [parent] = await tx
+            .select({ todoId: todoComments.todoId, deletedAt: todoComments.deletedAt })
+            .from(todoComments)
+            .where(eq(todoComments.commentId, data.parentCommentId))
+            .for("share");
+          if (!parent || parent.todoId !== data.todoId || parent.deletedAt !== null) {
+            throw new InvalidParentCommentError();
+          }
+        }
+        await this.assertMentionable(tx, data.todoId, mentionIds);
+
+        const [created] = await tx.insert(todoComments).values(data).returning({ commentId: todoComments.commentId });
+        await this.replaceMentions(tx, created.commentId, [], mentionIds);
+        // read inside the transaction: when reading fails, the comment is not stored either
+        return this.getDiscussionComment(created.commentId, tx);
+      }),
+    ).catch(mapMentionForeignKeyError);
+
+    if (created) {
+      await this.announce(created.todoId, async () => {
+        const parentReplyCount = created.parentCommentId ? await this.countRepliesOf(created.parentCommentId) : undefined;
+        return {
+          name: "comment.created",
+          data: parentReplyCount === undefined ? { comment: created } : { comment: created, parentReplyCount },
+        };
+      });
+    }
+    return created;
+  }
+
+  /**
+   * Changes the text. Only mentions that are new compared to the old text are checked, so a typo next to the mention
+   * of a former member can still be fixed; mentions of deleted accounts (no row anymore) do not come back.
+   * @returns undefined when the comment is gone or a placeholder (deleted meanwhile): its text must not come back
+   * @throws InvalidMentionError when a newly mentioned user may not be mentioned on this todo
+   */
+  async updateTodoComment(commentId: string, updateData: UpdateTodoComment): Promise<DiscussionComment | undefined> {
+    const result = await withRetryOnDeadlock(() =>
+      db.transaction(async (tx) => {
+        // FOR UPDATE: a concurrent delete waits, so the comment cannot become a placeholder before the update
+        const [current] = await tx
+          .select({ todoId: todoComments.todoId, comment: todoComments.comment })
+          .from(todoComments)
+          .where(and(eq(todoComments.commentId, commentId), isNull(todoComments.deletedAt)))
+          .for("update");
+        if (!current) return { outcome: "gone" as const };
+        // the same text again is no edit
+        if (updateData.comment === undefined || updateData.comment === current.comment) {
+          return { outcome: "unchanged" as const, comment: await this.getDiscussionComment(commentId, tx) };
+        }
+
+        const oldIds = new Set(extractMentionIds(current.comment));
+        const textIds = extractMentionIds(updateData.comment);
+        const addedIds = textIds.filter((id) => !oldIds.has(id));
+        await this.assertMentionable(tx, current.todoId, addedIds);
+
+        await tx
+          .update(todoComments)
+          .set({ ...updateData, updatedAt: new Date() })
+          .where(eq(todoComments.commentId, commentId));
+
+        const stored = await tx
+          .select({ userId: todoCommentMentions.userId })
+          .from(todoCommentMentions)
+          .where(eq(todoCommentMentions.commentId, commentId));
+        // stored rows still in the text stay, mentions of deleted accounts (no row anymore) do not come back
+        const storedIds = stored.map((row) => row.userId);
+        const wantedIds = textIds.filter((id) => storedIds.includes(id) || addedIds.includes(id));
+        await this.replaceMentions(tx, commentId, storedIds, wantedIds);
+        // read inside the transaction: when reading fails, the edit is rolled back
+        return { outcome: "changed" as const, comment: await this.getDiscussionComment(commentId, tx) };
+      }),
+    ).catch(mapMentionForeignKeyError);
+    if (result.outcome === "gone") return undefined;
+
+    const updated = result.comment;
+    if (updated && result.outcome === "changed") {
+      await this.announce(updated.todoId, async () => ({ name: "comment.updated", data: { comment: updated } }));
+    }
+    return updated;
+  }
+
+  /**
+   * Who may be mentioned on a todo: the owner of its list and the members of the list, not those with an open
+   * invitation. A todo without list has nobody to mention.
+   * @throws InvalidMentionError when one of the users may not be mentioned
+   */
+  private async assertMentionable(tx: DbTransaction, todoId: string, userIds: string[]): Promise<void> {
+    if (userIds.length === 0) return;
+
+    const [todo] = await tx
+      .select({ ownerId: todoLists.ownerId, listId: todoLists.listId })
+      .from(todos)
+      .innerJoin(todoLists, eq(todos.listId, todoLists.listId))
+      .where(eq(todos.todoId, todoId));
+    if (!todo) throw new InvalidMentionError();
+
+    const members = await tx
+      .select({ userId: todoListMembers.userId })
+      .from(todoListMembers)
+      .where(and(eq(todoListMembers.listId, todo.listId), inArray(todoListMembers.userId, userIds)));
+    const mentionable = new Set([todo.ownerId, ...members.map((member) => member.userId)]);
+
+    if (userIds.some((id) => !mentionable.has(id))) throw new InvalidMentionError();
+  }
+
+  /**
+   * The mention rows of a comment become the wanted users: rows that are no longer wanted are deleted, new ones are
+   * inserted, rows that stay are never touched.
+   * Lock order: the users rows are KEY SHARE-locked by the insert, after the comment; a cycle with the deletion of an
+   * account is resolved by the deadlock retry.
+   */
+  private async replaceMentions(
+    tx: DbTransaction,
+    commentId: string,
+    currentIds: string[],
+    wantedIds: string[],
+  ): Promise<void> {
+    const current = new Set(currentIds);
+    const wanted = new Set(wantedIds);
+    const removedIds = currentIds.filter((id) => !wanted.has(id));
+    const addedIds = wantedIds.filter((id) => !current.has(id));
+
+    if (removedIds.length > 0) {
+      await tx
+        .delete(todoCommentMentions)
+        .where(and(eq(todoCommentMentions.commentId, commentId), inArray(todoCommentMentions.userId, removedIds)));
+    }
+    if (addedIds.length > 0) {
+      await tx
+        .insert(todoCommentMentions)
+        .values(addedIds.map((userId) => ({ commentId, userId })))
+        .onConflictDoNothing();
+    }
+  }
+
+  /**
+   * Deletes a comment by the placeholder rule: with replies it stays as a placeholder without text, otherwise it is
+   * deleted for good, and so are the placeholders above it that have no replies left.
+   * @param tx the running transaction (e.g. the deletion of an account), otherwise an own one is used
+   * @throws CommentNotFoundError when the comment does not exist or already is a placeholder
+   */
+  async removeComment(commentId: string, tx?: DbTransaction): Promise<CommentRemoval> {
+    // an own transaction is retried after a deadlock; a given one belongs to the caller, who decides on retrying
+    if (!tx) {
+      const removal = await withRetryOnDeadlock(() => db.transaction((ownTx) => this.removeComment(commentId, ownTx)));
+      await this.publishRemoval(removal);
+      return removal;
+    }
+
+    // lock order: the comment first, then its parents upwards (cleanUpEmptyPlaceholders); a reply written meanwhile
+    // holds the comment FOR SHARE, so the count below sees it
+    const comment = await this.lockComment(tx, commentId);
+    if (!comment || comment.deletedAt !== null) throw new CommentNotFoundError();
+
+    if ((await this.countReplies(tx, commentId)) > 0) {
+      await tx
+        .update(todoComments)
+        .set({ deletedAt: sql`now()`, comment: null })
+        .where(eq(todoComments.commentId, commentId));
+      // a placeholder mentions nobody; a hard delete takes the rows with it (foreign key cascade)
+      await tx.delete(todoCommentMentions).where(eq(todoCommentMentions.commentId, commentId));
+      return {
+        commentId,
+        todoId: comment.todoId,
+        mode: "soft",
+        removedCommentIds: [],
+        removedComments: [{ commentId, parentCommentId: comment.parentCommentId }],
+      };
+    }
+
+    await tx.delete(todoComments).where(eq(todoComments.commentId, commentId));
+    const cleanedUp = await this.cleanUpEmptyPlaceholders(tx, comment.parentCommentId);
+    return {
+      commentId,
+      todoId: comment.todoId,
+      mode: "hard",
+      removedCommentIds: [commentId, ...cleanedUp.map((removed) => removed.commentId)],
+      removedComments: [{ commentId, parentCommentId: comment.parentCommentId }, ...cleanedUp],
+    };
+  }
+
+  /**
+   * Removes all live comments of a user by the placeholder rule (for the deletion of an account), so that replies of
+   * others survive below a placeholder without author. Runs in the transaction of the caller and locks the comments
+   * ordered by id, after user, lists and todos (lock order of the spec).
+   * No skipping or error handling is needed: all rows are locked in this transaction, and the cleanup of a hard delete
+   * only removes placeholders, which an own comment becomes only after it was processed itself.
+   * @returns the removals, for the caller to announce (publishRemoval) after its commit
+   */
+  async removeCommentsOfUser(userId: string, tx: DbTransaction): Promise<CommentRemoval[]> {
+    const own = await tx
+      .select({ commentId: todoComments.commentId })
+      .from(todoComments)
+      .where(and(eq(todoComments.userId, userId), isNull(todoComments.deletedAt)))
+      .orderBy(asc(todoComments.commentId))
+      .for("update");
+
+    const removals: CommentRemoval[] = [];
+    for (const { commentId } of own) removals.push(await this.removeComment(commentId, tx));
+    return removals;
+  }
+
+  /**
+   * Announces a removal to the open discussions, one event per removed comment (the comment itself, then the emptied
+   * placeholders above it). Call it only after the transaction of the removal has committed.
+   */
+  async publishRemoval(removal: CommentRemoval): Promise<void> {
+    for (const { commentId, parentCommentId } of removal.removedComments) {
+      const mode = commentId === removal.commentId ? removal.mode : "hard";
+      await this.announce(removal.todoId, async () => {
+        const data =
+          parentCommentId === null
+            ? { commentId, parentCommentId, mode }
+            : { commentId, parentCommentId, mode, parentReplyCount: await this.countRepliesOf(parentCommentId) };
+        return { name: "comment.deleted", data };
+      });
+    }
+  }
+
+  /**
+   * Announces after a commit. A failing announcement (e.g. the count query) is only logged: it must never turn a
+   * committed write into an error. Nothing is built when nobody listens to the todo.
+   */
+  private async announce(todoId: string, build: () => Promise<CommentEvent>): Promise<void> {
+    try {
+      if (!this.commentEvents.hasStreams(todoId)) return;
+      await this.commentEvents.publish(todoId, await build());
+    } catch (error) {
+      console.error("comment events: announcing a change failed", error);
+    }
+  }
+
+  /**
+   * Deletes a comment (also a placeholder) for good together with its replies on all levels (foreign key cascade),
+   * then the placeholders above it that have no replies left. Only for moderators.
+   * @throws CommentNotFoundError when the comment does not exist (anymore)
+   */
+  async removeBranch(commentId: string): Promise<CommentRemoval> {
+    const removal = await withRetryOnDeadlock(() =>
+      db.transaction(async (tx): Promise<CommentRemoval> => {
+        const comment = await this.lockComment(tx, commentId);
+        if (!comment) throw new CommentNotFoundError();
+
+        // a scalar subquery around the recursive count: the builder maps the result the same way for every driver
+        const [{ removed }] = await tx
+          .select({
+            removed: sql<number>`(
+              WITH RECURSIVE branch AS (
+                SELECT comment_id FROM todo_comments WHERE comment_id = ${commentId}
+                UNION ALL
+                SELECT c.comment_id FROM todo_comments c JOIN branch b ON c.parent_comment_id = b.comment_id
+              ) SELECT count(*)::int AS removed FROM branch
+            )`,
+          })
+          .from(todoComments)
+          .where(eq(todoComments.commentId, commentId));
+
+        await tx.delete(todoComments).where(eq(todoComments.commentId, commentId));
+        const cleanedUp = await this.cleanUpEmptyPlaceholders(tx, comment.parentCommentId);
+        return {
+          commentId,
+          todoId: comment.todoId,
+          mode: "branch",
+          removedCommentIds: [commentId, ...cleanedUp.map((removed) => removed.commentId)],
+          removedComments: [{ commentId, parentCommentId: comment.parentCommentId }, ...cleanedUp],
+          removedCount: removed,
+        };
+      }),
+    );
+    await this.publishRemoval(removal);
+    return removal;
+  }
+
+  private async lockComment(
+    tx: DbTransaction,
+    commentId: string,
+  ): Promise<Pick<TodoComment, "todoId" | "parentCommentId" | "deletedAt"> | undefined> {
+    const [comment] = await tx
+      .select({ todoId: todoComments.todoId, parentCommentId: todoComments.parentCommentId, deletedAt: todoComments.deletedAt })
+      .from(todoComments)
       .where(eq(todoComments.commentId, commentId))
-      .returning();
-
-    return todoComment;
+      .for("update");
+    return comment;
   }
 
-  async deleteTodoComment(commentId: string): Promise<TodoComment> {
-    const [todoComment] = await db.delete(todoComments).where(eq(todoComments.commentId, commentId)).returning();
-    return todoComment;
+  /** direct replies of a comment, read outside of a transaction */
+  private async countRepliesOf(commentId: string): Promise<number> {
+    const [{ replies }] = await db
+      .select({ replies: sql<number>`count(*)::int` })
+      .from(todoComments)
+      .where(eq(todoComments.parentCommentId, commentId));
+    return replies;
+  }
+
+  private async countReplies(tx: DbTransaction, commentId: string): Promise<number> {
+    const [{ replies }] = await tx
+      .select({ replies: sql<number>`count(*)::int` })
+      .from(todoComments)
+      .where(eq(todoComments.parentCommentId, commentId));
+    return replies;
+  }
+
+  /**
+   * Deletes the parent when it is a placeholder without replies, and so on upwards, each one locked before it is
+   * looked at. A placeholder nobody answers anymore has nothing left to show.
+   * @returns the deleted placeholders with their parents, nearest first
+   */
+  private async cleanUpEmptyPlaceholders(
+    tx: DbTransaction,
+    parentCommentId: string | null,
+  ): Promise<{ commentId: string; parentCommentId: string | null }[]> {
+    const removed: { commentId: string; parentCommentId: string | null }[] = [];
+    let currentId = parentCommentId;
+
+    while (currentId) {
+      const parent = await this.lockComment(tx, currentId);
+      if (!parent || parent.deletedAt === null || (await this.countReplies(tx, currentId)) > 0) break;
+
+      await tx.delete(todoComments).where(eq(todoComments.commentId, currentId));
+      removed.push({ commentId: currentId, parentCommentId: parent.parentCommentId });
+      currentId = parent.parentCommentId;
+    }
+
+    return removed;
   }
 }
 

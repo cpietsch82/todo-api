@@ -66,8 +66,8 @@ describe("Discussion of todos in a list", () => {
           .set(await createAuthHeader(user));
 
         expect(response.status).toBe(200);
-        expect(response.body.map((comment: { comment: string }) => comment.comment)).toEqual(["erster", "zweiter"]);
-        expect(response.body[1].author).toEqual({ userId: viewer.userId, username: "vera" });
+        expect(response.body.items.map((comment: { comment: string }) => comment.comment)).toEqual(["erster", "zweiter"]);
+        expect(response.body.items[1].author).toEqual({ userId: viewer.userId, username: "vera" });
       }
     });
 
@@ -105,6 +105,13 @@ describe("Discussion of todos in a list", () => {
       const response = await remove(owner, comment.commentId);
 
       expect(response.status).toBe(200);
+      expect(response.body).toEqual({
+        commentId: comment.commentId,
+        mode: "hard",
+        removedCommentIds: [comment.commentId],
+        todoId: todo.todoId,
+        removedComments: [{ commentId: comment.commentId, parentCommentId: null }],
+      });
       expect(await commentById(comment.commentId)).toBeUndefined();
     });
 
@@ -123,6 +130,7 @@ describe("Discussion of todos in a list", () => {
       const response = await remove(viewer, comment.commentId);
 
       expect(response.status).toBe(200);
+      expect(response.body.mode).toBe("hard");
     });
 
     it("should still let the creator of a todo without list moderate it", async () => {

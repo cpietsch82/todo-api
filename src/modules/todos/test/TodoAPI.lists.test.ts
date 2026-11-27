@@ -365,7 +365,7 @@ describe("TodoAPI with lists", () => {
       const response = await comment(viewer, todo.todoId);
 
       expect(response.status).toBe(201);
-      expect(response.body).toMatchObject({ todoId: todo.todoId, userId: viewer.userId });
+      expect(response.body).toMatchObject({ todoId: todo.todoId, author: { userId: viewer.userId } });
     });
 
     it("should not let a stranger or a removed member comment", async () => {

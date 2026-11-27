@@ -88,23 +88,27 @@ export const validateParams = (schema: ZodObject) => {
   };
 };
 
-// export const validateQuery = (schema: ZodObject) => {
-//   return (req: Request, res: Response, next: NextFunction) => {
-//     try {
-//       const result = schema.parse(req.query);
-//       req.query = result.data;
-//       next();
-//     } catch (error) {
-//       if (error instanceof ZodError) {
-//         return res.status(400).json({
-//           error: "Invalid parameters",
-//           errors: error.issues.map((err) => ({
-//             path: err.path.join("."),
-//             message: err.message,
-//           })),
-//         });
-//       }
-//       next(error);
-//     }
-//   };
-// };
+/**
+ * Validates the query string. Express 5 has a read-only req.query, so the parsed result
+ * (with defaults and transforms) is available as res.locals.query.
+ */
+export const validateQuery = (schema: ZodObject) => {
+  return (req: Request, res: Response, next: NextFunction) => {
+    try {
+      res.locals.query = schema.parse(req.query);
+      next();
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return res.status(400).json({
+          status: "error",
+          message: "Query validation error",
+          errors: error.issues.map((err) => ({
+            path: err.path.join("."),
+            message: err.message,
+          })),
+        });
+      }
+      next(error);
+    }
+  };
+};

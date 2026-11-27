@@ -177,7 +177,7 @@ describe("TodoCommentAPI", () => {
         .send({ commentRecord: { todoId: testTodo.todoId, comment: "Admin note" } });
 
       expect(response.status).toBe(201);
-      expect(response.body).toMatchObject({ todoId: testTodo.todoId, userId: admin.userId });
+      expect(response.body).toMatchObject({ todoId: testTodo.todoId, author: { userId: admin.userId } });
     });
 
     it("should store the authenticated user as author, not a userId from the body", async () => {
@@ -189,7 +189,7 @@ describe("TodoCommentAPI", () => {
         .send({ commentRecord: { todoId: testTodo.todoId, comment: "Mine", userId: otherUser.userId } });
 
       expect(response.status).toBe(201);
-      expect(response.body.userId).toBe(testUser.userId);
+      expect(response.body.author.userId).toBe(testUser.userId);
     });
 
     it("should reject a request with a missing commentRecord body", async () => {
@@ -202,6 +202,37 @@ describe("TodoCommentAPI", () => {
 
       expect(response.status).toBe(400);
       expect(response.body.status).toBe("error");
+    });
+
+    const post = async (comment: string) =>
+      request(server)
+        .post("/api/todo-comments")
+        .set("Content-Type", "application/json")
+        .set(await createAuthHeader(testUser))
+        .send({ commentRecord: { todoId: testTodo.todoId, comment } });
+
+    it("should reject a comment longer than 2000 characters", async () => {
+      const response = await post("x".repeat(2001));
+      expect(response.status).toBe(400);
+    });
+
+    it("should accept a comment of exactly 2000 characters", async () => {
+      const response = await post("x".repeat(2000));
+      expect(response.status).toBe(201);
+    });
+
+    it("should store a placeholder without text and author", async () => {
+      const [placeholder] = await db
+        .insert(todoComments)
+        .values({ todoId: testTodo.todoId, userId: null, comment: null, deletedAt: new Date() })
+        .returning();
+      expect(placeholder.deletedAt).toBeInstanceOf(Date);
+    });
+
+    it("should not store a comment without text unless it is deleted", async () => {
+      await expect(
+        db.insert(todoComments).values({ todoId: testTodo.todoId, userId: testUser.userId, comment: null }),
+      ).rejects.toThrow();
     });
   });
 
@@ -323,7 +354,7 @@ describe("TodoCommentAPI", () => {
   // DELETE /api/todo-comments/:commentId
   // ---------------------------------------------------------------------------
   describe("DELETE /api/todo-comments/:commentId", () => {
-    it("should delete an existing comment and return the deleted record", async () => {
+    it("should delete an existing comment and return how it was removed", async () => {
       const authHeader = await createAuthHeader(testUser);
       const existing = await generateTodoComment(testTodo.todoId, testUser.userId, { comment: "Comment to delete" });
 
@@ -332,7 +363,13 @@ describe("TodoCommentAPI", () => {
         .set(authHeader);
 
       expect(deleteResponse.status).toBe(200);
-      expect(deleteResponse.body.commentId).toBe(existing.commentId);
+      expect(deleteResponse.body).toEqual({
+        commentId: existing.commentId,
+        mode: "hard",
+        removedCommentIds: [existing.commentId],
+        todoId: expect.any(String),
+        removedComments: [{ commentId: existing.commentId, parentCommentId: null }],
+      });
 
       // verify it is actually gone
       const getResponse = await request(server)
