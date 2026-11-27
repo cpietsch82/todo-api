@@ -1,11 +1,12 @@
 import { describe, it, expect, beforeAll, beforeEach } from "vitest";
 import request from "supertest";
 import type { Server } from "node:http";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import type { Todo, User } from "@/db/schema";
 import { users } from "@/modules/users/schema/user.schema";
 import {
+  todoListInvitations,
   todoListMembers,
   todoLists,
   type TodoList,
@@ -158,5 +159,259 @@ describe("mentions in comment responses", () => {
     expect(response.body.items[0].mentions).toEqual([
       { userId: viewer.userId, username: "vera" },
     ]);
+  });
+
+  describe("writing mentions", () => {
+    let stranger: User;
+    let invitee: User;
+
+    beforeEach(async () => {
+      stranger = await generateUser();
+      invitee = await generateUser();
+      // an open invitation is no membership
+      await db.insert(todoListInvitations).values({
+        listId: list.listId,
+        inviteeId: invitee.userId,
+        invitedBy: owner.userId,
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      });
+    });
+
+    const post = async (
+      user: User,
+      commentRecord: { todoId: string; comment: string; parentCommentId?: string },
+    ) =>
+      request(server)
+        .post("/api/todo-comments")
+        .set(await createAuthHeader(user))
+        .send({ commentRecord });
+
+    const patch = async (user: User, commentId: string, comment: string) =>
+      request(server)
+        .patch(`/api/todo-comments/${commentId}`)
+        .set(await createAuthHeader(user))
+        .send({ updates: { comment } });
+
+    const mentionRows = (commentId: string) =>
+      db
+        .select()
+        .from(todoCommentMentions)
+        .where(eq(todoCommentMentions.commentId, commentId));
+
+    const countComments = async (todoId: string) =>
+      (
+        await db
+          .select()
+          .from(todoComments)
+          .where(eq(todoComments.todoId, todoId))
+      ).length;
+
+    const removeFromList = (user: User) =>
+      db
+        .delete(todoListMembers)
+        .where(
+          and(
+            eq(todoListMembers.listId, list.listId),
+            eq(todoListMembers.userId, user.userId),
+          ),
+        );
+
+    it("should store a mention of a member and of the list owner", async () => {
+      const response = await post(viewer, {
+        todoId: todo.todoId,
+        comment: `Fragt <@${editor.userId}> oder <@${owner.userId}>`,
+      });
+
+      expect(response.status).toBe(201);
+      expect(
+        response.body.mentions.map((m: { userId: string }) => m.userId).sort(),
+      ).toEqual([editor.userId, owner.userId].sort());
+      expect(await mentionRows(response.body.commentId)).toHaveLength(2);
+    });
+
+    it("should store a person mentioned twice once", async () => {
+      const response = await post(viewer, {
+        todoId: todo.todoId,
+        comment: `<@${editor.userId}> und nochmal <@${editor.userId}>`,
+      });
+
+      expect(response.status).toBe(201);
+      expect(response.body.mentions).toEqual([
+        { userId: editor.userId, username: "edda" },
+      ]);
+      expect(await mentionRows(response.body.commentId)).toHaveLength(1);
+    });
+
+    it.each([
+      ["a stranger", () => stranger.userId],
+      ["a person with an open invitation", () => invitee.userId],
+    ])("should refuse a mention of %s and store nothing", async (_, id) => {
+      const response = await post(viewer, {
+        todoId: todo.todoId,
+        comment: `Hallo <@${id()}>`,
+      });
+
+      expect(response.status).toBe(400);
+      expect(response.text).toBe("Invalid mention");
+      expect(await countComments(todo.todoId)).toBe(0);
+    });
+
+    it("should refuse a mention in a reply and store nothing", async () => {
+      const parent = await generateTodoComment(todo.todoId, owner.userId);
+
+      const response = await post(viewer, {
+        todoId: todo.todoId,
+        parentCommentId: parent.commentId,
+        comment: `Hallo <@${stranger.userId}>`,
+      });
+
+      expect(response.status).toBe(400);
+      expect(response.text).toBe("Invalid mention");
+      expect(await countComments(todo.todoId)).toBe(1);
+    });
+
+    it("should refuse any mention on a todo without list", async () => {
+      const ownTodo = await generateTodo(viewer.userId);
+
+      const response = await post(viewer, {
+        todoId: ownTodo.todoId,
+        comment: `Notiz für <@${viewer.userId}>`,
+      });
+
+      expect(response.status).toBe(400);
+      expect(response.text).toBe("Invalid mention");
+      expect(await countComments(ownTodo.todoId)).toBe(0);
+    });
+
+    it("should keep broken tokens as plain text", async () => {
+      const text = `<@123> und <@${editor.userId.toUpperCase()}>`;
+
+      const response = await post(viewer, { todoId: todo.todoId, comment: text });
+
+      expect(response.status).toBe(201);
+      expect(response.body.comment).toBe(text);
+      expect(response.body.mentions).toEqual([]);
+      expect(await mentionRows(response.body.commentId)).toHaveLength(0);
+    });
+
+    it("should replace the mentions on an edit", async () => {
+      const created = await post(viewer, {
+        todoId: todo.todoId,
+        comment: `Hallo <@${editor.userId}>`,
+      });
+
+      const response = await patch(
+        viewer,
+        created.body.commentId,
+        `Hallo <@${owner.userId}>`,
+      );
+
+      expect(response.status).toBe(200);
+      expect(response.body.mentions).toEqual([
+        { userId: owner.userId, username: "olaf" },
+      ]);
+      expect(
+        (await mentionRows(created.body.commentId)).map((row) => row.userId),
+      ).toEqual([owner.userId]);
+    });
+
+    it("should refuse a new mention of a stranger on an edit", async () => {
+      const created = await post(viewer, {
+        todoId: todo.todoId,
+        comment: `Hallo <@${editor.userId}>`,
+      });
+
+      const response = await patch(
+        viewer,
+        created.body.commentId,
+        `Hallo <@${editor.userId}> und <@${stranger.userId}>`,
+      );
+
+      expect(response.status).toBe(400);
+      expect(response.text).toBe("Invalid mention");
+      expect(
+        (await mentionRows(created.body.commentId)).map((row) => row.userId),
+      ).toEqual([editor.userId]);
+    });
+
+    it("should allow fixing a typo next to a mention of a former member", async () => {
+      const created = await post(editor, {
+        todoId: todo.todoId,
+        comment: `Danke <@${viewer.userId}>, erledgt`,
+      });
+      await removeFromList(viewer);
+
+      const response = await patch(
+        editor,
+        created.body.commentId,
+        `Danke <@${viewer.userId}>, erledigt`,
+      );
+
+      expect(response.status).toBe(200);
+      expect(response.body.mentions).toEqual([
+        { userId: viewer.userId, username: "vera" },
+      ]);
+    });
+
+    it("should allow fixing a typo next to a mention of a deleted account", async () => {
+      const created = await post(editor, {
+        todoId: todo.todoId,
+        comment: `Danke <@${viewer.userId}>, erledgt`,
+      });
+      await resolveModule(UserService).deleteUser(viewer.userId);
+
+      const response = await patch(
+        editor,
+        created.body.commentId,
+        `Danke <@${viewer.userId}>, erledigt`,
+      );
+
+      expect(response.status).toBe(200);
+      expect(response.body.comment).toContain(`<@${viewer.userId}>`);
+      expect(response.body.mentions).toEqual([]);
+      expect(await mentionRows(created.body.commentId)).toHaveLength(0);
+    });
+
+    it("should refuse adding a former member on an edit", async () => {
+      const created = await post(editor, {
+        todoId: todo.todoId,
+        comment: "Wer übernimmt?",
+      });
+      await removeFromList(viewer);
+
+      const response = await patch(
+        editor,
+        created.body.commentId,
+        `Wer übernimmt? <@${viewer.userId}>`,
+      );
+
+      expect(response.status).toBe(400);
+      expect(response.text).toBe("Invalid mention");
+      const [stored] = await db
+        .select()
+        .from(todoComments)
+        .where(eq(todoComments.commentId, created.body.commentId));
+      expect(stored.comment).toBe("Wer übernimmt?");
+      expect(stored.updatedAt).toEqual(stored.createdAt);
+    });
+
+    it("should clear the mentions when the comment becomes a placeholder", async () => {
+      const created = await post(editor, {
+        todoId: todo.todoId,
+        comment: `Hallo <@${viewer.userId}>`,
+      });
+      await generateTodoComment(todo.todoId, owner.userId, {
+        parentCommentId: created.body.commentId,
+      });
+      expect(await mentionRows(created.body.commentId)).toHaveLength(1);
+
+      const response = await request(server)
+        .delete(`/api/todo-comments/${created.body.commentId}`)
+        .set(await createAuthHeader(editor));
+
+      expect(response.status).toBe(200);
+      expect(response.body.mode).toBe("soft");
+      expect(await mentionRows(created.body.commentId)).toHaveLength(0);
+    });
   });
 });

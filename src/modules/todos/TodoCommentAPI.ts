@@ -15,7 +15,12 @@ import {
 import { typedHandler } from "@/utils/typedHandler";
 import { TypedRequest, TypedRequestBody, TypedRequestParams } from "../express/Express";
 import type { Request, Response } from "express";
-import { CommentNotFoundError, InvalidParentCommentError, TodoCommentService } from "./TodoCommentService";
+import {
+  CommentNotFoundError,
+  InvalidMentionError,
+  InvalidParentCommentError,
+  TodoCommentService,
+} from "./TodoCommentService";
 import {
   requirePermissions,
   requireTodoAccess,
@@ -121,6 +126,7 @@ export class TodoCommentAPI extends APIModule {
       res.status(201).json(todoComment);
     } catch (error) {
       if (error instanceof InvalidParentCommentError) return res.respondBadRequest("Invalid parent comment", true);
+      if (error instanceof InvalidMentionError) return res.respondBadRequest("Invalid mention", true);
       throw error;
     }
   }
@@ -132,10 +138,15 @@ export class TodoCommentAPI extends APIModule {
     const todoComment = await this.todoCommentService.getTodoCommentById(commentId);
     if (!todoComment) return res.respondNotFound();
 
-    const updatedTodoComment = await this.todoCommentService.updateTodoComment(commentId, updates);
-    // deleted (or turned into a placeholder) after the access check
-    if (!updatedTodoComment) return res.respondNotFound();
-    res.status(200).json(updatedTodoComment);
+    try {
+      const updatedTodoComment = await this.todoCommentService.updateTodoComment(commentId, updates);
+      // deleted (or turned into a placeholder) after the access check
+      if (!updatedTodoComment) return res.respondNotFound();
+      res.status(200).json(updatedTodoComment);
+    } catch (error) {
+      if (error instanceof InvalidMentionError) return res.respondBadRequest("Invalid mention", true);
+      throw error;
+    }
   }
 
   private async deleteTodoComment(req: TypedRequestParams<TodoCommentByIdParams>, res: Response) {
