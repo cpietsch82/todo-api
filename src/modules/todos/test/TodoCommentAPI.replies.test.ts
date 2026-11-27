@@ -106,6 +106,13 @@ describe("Pages of the discussion of a todo", () => {
       expect(response.body.total).toBe(2);
     });
 
+    it("should answer 400 for a well-formed cursor with an impossible date", async () => {
+      const cursor = Buffer.from(JSON.stringify(["2026-02-30 10:00:00", "3f2a5b1e-0000-4000-8000-000000000001"])).toString(
+        "base64url",
+      );
+      expect((await get(viewer, todo.todoId, `?before=${cursor}`)).status).toBe(400);
+    });
+
     it.each(["?limit=0", "?limit=51", "?limit=abc", "?before=kaputt"])("should answer 400 for %s", async (query) => {
       expect((await get(viewer, todo.todoId, query)).status).toBe(400);
     });

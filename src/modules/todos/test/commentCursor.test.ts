@@ -12,6 +12,9 @@ describe("commentCursor", () => {
     "abc",
     Buffer.from("[1,2]").toString("base64url"),
     Buffer.from('["kein datum","3f2a5b1e-0000-4000-8000-000000000001"]').toString("base64url"),
+    ...["2026-02-30 10:00:00", "2026-11-31 10:00:00", "0000-01-01 00:00:00"].map((createdAt) =>
+      Buffer.from(JSON.stringify([createdAt, "3f2a5b1e-0000-4000-8000-000000000001"])).toString("base64url"),
+    ),
   ])("should reject the malformed cursor %j", (value) => {
     expect(decodeCommentCursor(value)).toBeUndefined();
   });
