@@ -177,7 +177,7 @@ describe("TodoCommentAPI", () => {
         .send({ commentRecord: { todoId: testTodo.todoId, comment: "Admin note" } });
 
       expect(response.status).toBe(201);
-      expect(response.body).toMatchObject({ todoId: testTodo.todoId, userId: admin.userId });
+      expect(response.body).toMatchObject({ todoId: testTodo.todoId, author: { userId: admin.userId } });
     });
 
     it("should store the authenticated user as author, not a userId from the body", async () => {
@@ -189,7 +189,7 @@ describe("TodoCommentAPI", () => {
         .send({ commentRecord: { todoId: testTodo.todoId, comment: "Mine", userId: otherUser.userId } });
 
       expect(response.status).toBe(201);
-      expect(response.body.userId).toBe(testUser.userId);
+      expect(response.body.author.userId).toBe(testUser.userId);
     });
 
     it("should reject a request with a missing commentRecord body", async () => {

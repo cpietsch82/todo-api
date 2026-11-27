@@ -244,13 +244,14 @@ type TodoCommentCheck = (comment: TodoComment, todo: Todo, user: AccessingUser) 
 
 /**
  * Loads the comment of the route and its todo and checks the access with the given rule.
- * 404 when the comment (or its todo) does not exist, 403 with the reason in the log when the rule does not allow it.
+ * 404 when the comment (or its todo) does not exist, or the comment is deleted and options.allowDeleted is false, 403 with the reason in the log when the rule does not allow it.
  */
 function createTodoCommentCheck(
   isAllowed: TodoCommentCheck,
   reason: string,
   todoCommentService: TodoCommentService,
   todoService: TodoService,
+  options: { allowDeleted: boolean },
 ): RequestHandler {
   return async (req: Request, res: Response, next: NextFunction) => {
     const user = getAuthenticatedUser(req, res);
@@ -258,7 +259,8 @@ function createTodoCommentCheck(
 
     const comment = await todoCommentService.getTodoCommentById(req.params.commentId as string);
     const todo = comment ? await todoService.getTodoById(comment.todoId) : undefined;
-    if (!comment || !todo) {
+    // a placeholder is no comment anymore: 404 before the rights are looked at
+    if (!comment || !todo || (comment.deletedAt !== null && !options.allowDeleted)) {
       res.respondNotFound();
       return;
     }
@@ -285,6 +287,7 @@ export function requireTodoCommentDeleteAccess(
     "Not allowed to delete this comment",
     todoCommentService,
     todoService,
+    { allowDeleted: true },
   );
 }
 
@@ -303,6 +306,21 @@ export function requireTodoCommentEditAccess(
     "Only the author with access to the todo may change a comment",
     todoCommentService,
     todoService,
+    { allowDeleted: false },
+  );
+}
+
+/** Requires the right to read the comment of the route: whoever may see its todo; placeholders are allowed. */
+export function requireTodoCommentReadAccess(
+  todoCommentService: TodoCommentService = resolveModule(TodoCommentService),
+  todoService: TodoService = resolveModule(TodoService),
+): RequestHandler {
+  return createTodoCommentCheck(
+    (_comment, todo, user) => todoService.canAccessTodo(todo, user),
+    "Not allowed to read this comment",
+    todoCommentService,
+    todoService,
+    { allowDeleted: true },
   );
 }
 

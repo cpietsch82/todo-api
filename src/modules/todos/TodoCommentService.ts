@@ -9,6 +9,15 @@ import { hasPermission } from "@/modules/authorization/permissions";
 import type { AccessingUser } from "./TodoService";
 import { TodoListService } from "@/modules/todo-lists/TodoListService";
 import { resolveModule } from "@modules/core/resolveModule";
+import { withRetryOnDeadlock } from "@/utils/dbErrors";
+
+/** the parent of a reply does not exist, belongs to another todo or is deleted */
+export class InvalidParentCommentError extends Error {
+  constructor() {
+    super("Invalid parent comment");
+    this.name = "InvalidParentCommentError";
+  }
+}
 
 /** a comment in the discussion of a todo; deleted ones stay as placeholders, without text and author */
 export interface DiscussionComment {
@@ -170,19 +179,51 @@ export class TodoCommentService extends BaseModule {
     return list !== undefined && (await this.todoListService.getListRole(list, user)) === "owner";
   }
 
-  async createTodoComment(data: NewTodoComment): Promise<TodoComment> {
-    const [todoComment] = await db.insert(todoComments).values(data).returning();
-    return todoComment;
+  /** direct replies of a comment, also below a placeholder; total counts the direct replies */
+  async getRepliesPage(commentId: string, page: PageParams): Promise<CommentPage> {
+    const { items, nextCursor } = await this.queryCommentPage(eq(todoComments.parentCommentId, commentId), page);
+    const [{ total }] = await db
+      .select({ total: sql<number>`count(*)::int` })
+      .from(todoComments)
+      .where(eq(todoComments.parentCommentId, commentId));
+    return { items, nextCursor, total };
   }
 
-  async updateTodoComment(commentId: string, updateData: UpdateTodoComment): Promise<TodoComment> {
-    const [todoComment] = await db
-      .update(todoComments)
-      .set(updateData)
-      .where(eq(todoComments.commentId, commentId))
-      .returning();
+  async createTodoComment(data: NewTodoComment): Promise<DiscussionComment> {
+    let commentId: string;
 
-    return todoComment;
+    if (data.parentCommentId) {
+      const parentCommentId = data.parentCommentId;
+      commentId = await withRetryOnDeadlock(() =>
+        db.transaction(async (tx) => {
+          // FOR SHARE: a concurrent delete of the parent (soft or hard) waits until the reply is in
+          const [parent] = await tx
+            .select({ todoId: todoComments.todoId, deletedAt: todoComments.deletedAt })
+            .from(todoComments)
+            .where(eq(todoComments.commentId, parentCommentId))
+            .for("share");
+          if (!parent || parent.todoId !== data.todoId || parent.deletedAt !== null) {
+            throw new InvalidParentCommentError();
+          }
+          const [created] = await tx.insert(todoComments).values(data).returning({ commentId: todoComments.commentId });
+          return created.commentId;
+        }),
+      );
+    } else {
+      const [created] = await db.insert(todoComments).values(data).returning({ commentId: todoComments.commentId });
+      commentId = created.commentId;
+    }
+
+    return (await this.getDiscussionComment(commentId))!;
+  }
+
+  async updateTodoComment(commentId: string, updateData: UpdateTodoComment): Promise<DiscussionComment> {
+    await db
+      .update(todoComments)
+      .set({ ...updateData, updatedAt: new Date() })
+      .where(eq(todoComments.commentId, commentId));
+
+    return (await this.getDiscussionComment(commentId))!;
   }
 
   async deleteTodoComment(commentId: string): Promise<TodoComment> {
