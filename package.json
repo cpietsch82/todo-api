@@ -1,6 +1,6 @@
 {
   "name": "todo-api",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A full type safe TODO API built with Drizzle ORM, Zod, and Express.",
   "main": "index.js",
   "type": "commonjs",
