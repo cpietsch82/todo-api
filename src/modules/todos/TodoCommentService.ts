@@ -7,6 +7,7 @@ import { asc, desc, eq } from "drizzle-orm";
 import { hasPermission } from "@/modules/authorization/permissions";
 import type { AccessingUser } from "./TodoService";
 import { TodoListService } from "@/modules/todo-lists/TodoListService";
+import { resolveModule } from "@modules/core/resolveModule";
 
 /** a comment as part of the discussion of a todo, with the author, so the others see who wrote it */
 export interface TodoDiscussionComment {
@@ -25,7 +26,7 @@ export class TodoCommentService extends BaseModule {
 
   constructor() {
     super("todoComment.service", "Business logic for Todo Comment management");
-    this.todoListService = new TodoListService();
+    this.todoListService = resolveModule(TodoListService);
 
     if (!TodoCommentService.instance) {
       TodoCommentService.instance = this;

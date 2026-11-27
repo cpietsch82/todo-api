@@ -1,5 +1,6 @@
 import TokenService from "./TokenService";
 import { logger } from "@/utils/logger";
+import { resolveModule } from "@modules/core/resolveModule";
 
 export const REFRESH_TOKEN_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
 
@@ -9,7 +10,7 @@ export const REFRESH_TOKEN_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
  * @returns a function that stops the cleanup
  */
 export function startRefreshTokenCleanup(intervalMs = REFRESH_TOKEN_CLEANUP_INTERVAL_MS): () => void {
-  const tokenService = new TokenService();
+  const tokenService = resolveModule(TokenService);
 
   const cleanup = async () => {
     try {

@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 import { APIModule } from "@modules/core/APIModule";
 import { requirePermissions } from "@/middleware/permissions";
 import { TodoListMemberService } from "./TodoListMemberService";
+import { resolveModule } from "@modules/core/resolveModule";
 
 /**
  * Suggestions for inviting: the users one currently shares a list with. There is no directory of all users, because
@@ -14,7 +15,7 @@ export class TodoListContactAPI extends APIModule {
   constructor() {
     super("todo-list-contact.api", "API Module for the contacts of todo lists", "/todo-list-contacts");
 
-    this.memberService = new TodoListMemberService();
+    this.memberService = resolveModule(TodoListMemberService);
 
     if (!TodoListContactAPI.instance) {
       TodoListContactAPI.instance = this;

@@ -6,6 +6,7 @@ import { TypedRequest, TypedRequestParams } from "../express/Express";
 import { typedHandler } from "@/utils/typedHandler";
 import { validateBody, validateParams } from "@/middleware/validate";
 import { requirePermissions, requireUserOwnership } from "@/middleware/permissions";
+import { resolveModule } from "@modules/core/resolveModule";
 
 export class UserAPI extends APIModule {
   public static instance: UserAPI;
@@ -14,7 +15,7 @@ export class UserAPI extends APIModule {
   constructor() {
     super("user.api", "API Module for User management", "/users");
 
-    this.userService = new UserService();
+    this.userService = resolveModule(UserService);
 
     if (!UserAPI.instance) {
       UserAPI.instance = this;
@@ -23,7 +24,7 @@ export class UserAPI extends APIModule {
   }
 
   protected initializeRoutes(): void {
-    const requireCurrentUser = requireUserOwnership(new UserService());
+    const requireCurrentUser = requireUserOwnership(resolveModule(UserService));
 
     this.router.get("/", requirePermissions("users:list"), this.getAllUsers.bind(this));
     this.router.get(

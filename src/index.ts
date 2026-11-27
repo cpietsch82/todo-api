@@ -1,12 +1,5 @@
 import { ExpressAPI } from "@modules/express/Express";
-import { TodoAPI } from "@modules/todos/TodoAPI";
-import { TodoCommentAPI } from "@modules/todos/TodoCommentAPI";
-import { TodoListAPI } from "@modules/todo-lists/TodoListAPI";
-import { TodoListInvitationAPI } from "@modules/todo-lists/TodoListInvitationAPI";
-import { TodoListContactAPI } from "@modules/todo-lists/TodoListContactAPI";
-import { AuthenticationAPI } from "@/modules/authentication/AuthenticationAPI";
-import { UserAPI } from "./modules/users/UserAPI";
-import { AdminAPI } from "./modules/admin/AdminAPI";
+import { findAPIModuleFiles, instantiateAPIModules } from "@modules/core/apiLoader";
 import { waitForDatabase } from "@/db";
 import { startRefreshTokenCleanup } from "@/modules/authentication/refreshTokenCleanup";
 import env from "../env";
@@ -20,14 +13,8 @@ async function bootstrap() {
   await waitForDatabase();
 
   const expressAPI = new ExpressAPI();
-  new AuthenticationAPI();
-  new TodoAPI();
-  new TodoCommentAPI();
-  new TodoListAPI();
-  new TodoListInvitationAPI();
-  new TodoListContactAPI();
-  new UserAPI();
-  new AdminAPI();
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- the API modules are found at runtime, see apiLoader
+  instantiateAPIModules(findAPIModuleFiles().map((file) => require(file)));
   expressAPI.listen();
   const stopRefreshTokenCleanup = startRefreshTokenCleanup();
 

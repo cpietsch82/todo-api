@@ -1,5 +1,6 @@
 import { BaseModule } from "./BaseModule";
 import { ExpressAPI, SubRouter } from "@modules/express/Express";
+import { resolveModule } from "@modules/core/resolveModule";
 
 export abstract class APIModule extends BaseModule {
   protected router: SubRouter;
@@ -10,7 +11,7 @@ export abstract class APIModule extends BaseModule {
     if (!moduleId.endsWith(".api")) throw new Error("API Module IDs must end with .api");
     super(moduleId, description);
 
-    this.expressAPI = new ExpressAPI();
+    this.expressAPI = resolveModule(ExpressAPI);
     this.router = isPreAuthRoute ? this.expressAPI.preAuthRoute(apiRoute) : this.expressAPI.route(apiRoute);
 
     this.initializeRoutes();

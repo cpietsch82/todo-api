@@ -9,6 +9,7 @@ import UserService from "@/modules/users/UserService";
 import { TodoListService } from "@/modules/todo-lists/TodoListService";
 import { hasListRole } from "@/modules/todo-lists/listRoles";
 import type { ListRole, TodoList } from "@/modules/todo-lists/schema/todo-list.schema";
+import { resolveModule } from "@modules/core/resolveModule";
 
 declare global {
   namespace Express {
@@ -100,7 +101,7 @@ export function requireFreshPermissions(...required: Permission[]): RequestHandl
   return createFreshPermissionCheck(
     (granted) => hasEveryPermission(granted, required),
     `Missing permissions: ${required.join(", ")}`,
-    new AuthorizationService(),
+    resolveModule(AuthorizationService),
   );
 }
 
@@ -111,7 +112,7 @@ export function requireAnyFreshPermission(...candidates: Permission[]): RequestH
   return createFreshPermissionCheck(
     (granted) => hasAnyPermission(granted, candidates),
     "Insufficient Permissions!",
-    new AuthorizationService(),
+    resolveModule(AuthorizationService),
   );
 }
 
@@ -209,18 +210,18 @@ const todoIdFromParams = (req: Request) => req.params.todoId as string | undefin
  */
 export function requireTodoAccess(
   resolveTodoId: (req: Request) => string | undefined = todoIdFromParams,
-  todoService: TodoService = new TodoService(),
+  todoService: TodoService = resolveModule(TodoService),
 ): RequestHandler {
   return createTodoAccessCheck((service, todo, user) => service.canAccessTodo(todo, user), resolveTodoId, todoService);
 }
 
 /** Requires the right to change the todo of the route (TodoService.canEditTodo). */
-export function requireTodoEditAccess(todoService: TodoService = new TodoService()): RequestHandler {
+export function requireTodoEditAccess(todoService: TodoService = resolveModule(TodoService)): RequestHandler {
   return createTodoAccessCheck((service, todo, user) => service.canEditTodo(todo, user), todoIdFromParams, todoService);
 }
 
 /** Requires the right to delete the todo of the route (TodoService.canDeleteTodo). */
-export function requireTodoDeleteAccess(todoService: TodoService = new TodoService()): RequestHandler {
+export function requireTodoDeleteAccess(todoService: TodoService = resolveModule(TodoService)): RequestHandler {
   return createTodoAccessCheck((service, todo, user) => service.canDeleteTodo(todo, user), todoIdFromParams, todoService);
 }
 
@@ -228,7 +229,7 @@ export function requireTodoDeleteAccess(todoService: TodoService = new TodoServi
  * Requires ownership of the referenced todo comment or admin privileges.
  */
 export function requireTodoCommentOwnership(
-  todoCommentService: TodoCommentService = new TodoCommentService(),
+  todoCommentService: TodoCommentService = resolveModule(TodoCommentService),
 ): RequestHandler {
   return createOwnershipMiddleware(
     async (req) => {
@@ -276,8 +277,8 @@ function createTodoCommentCheck(
  * the author, the moderator of the discussion (owner of the list, creator of a todo without list) or an admin.
  */
 export function requireTodoCommentDeleteAccess(
-  todoCommentService: TodoCommentService = new TodoCommentService(),
-  todoService: TodoService = new TodoService(),
+  todoCommentService: TodoCommentService = resolveModule(TodoCommentService),
+  todoService: TodoService = resolveModule(TodoService),
 ): RequestHandler {
   return createTodoCommentCheck(
     (comment, todo, user) => todoCommentService.canDeleteComment(comment, todo, user),
@@ -292,8 +293,8 @@ export function requireTodoCommentDeleteAccess(
  * removed member cannot change what the list reads anymore.
  */
 export function requireTodoCommentEditAccess(
-  todoCommentService: TodoCommentService = new TodoCommentService(),
-  todoService: TodoService = new TodoService(),
+  todoCommentService: TodoCommentService = resolveModule(TodoCommentService),
+  todoService: TodoService = resolveModule(TodoService),
 ): RequestHandler {
   return createTodoCommentCheck(
     async (comment, todo, user) =>
@@ -308,7 +309,7 @@ export function requireTodoCommentEditAccess(
 /**
  * Requires ownership of the referenced user resource or admin privileges.
  */
-export function requireUserOwnership(userService: UserService = new UserService()): RequestHandler {
+export function requireUserOwnership(userService: UserService = resolveModule(UserService)): RequestHandler {
   return createOwnershipMiddleware(
     async (req) => {
       const user = await userService.getUserById(req.params.userId as string);
@@ -328,7 +329,7 @@ export function requireUserOwnership(userService: UserService = new UserService(
 export function requireListRole(
   minimum: ListRole,
   resolveListId: (req: Request) => string | undefined = (req) => req.params.listId as string | undefined,
-  todoListService: TodoListService = new TodoListService(),
+  todoListService: TodoListService = resolveModule(TodoListService),
 ): RequestHandler {
   return async (req: Request, res: Response, next: NextFunction) => {
     const user = getAuthenticatedUser(req, res);

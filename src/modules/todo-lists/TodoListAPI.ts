@@ -30,6 +30,7 @@ import {
   type ListMemberParams,
   type TransferListBody,
 } from "./schema/sharing.schema";
+import { resolveModule } from "@modules/core/resolveModule";
 
 /**
  * Lists of todos. Who may do what in a list follows from the role in it (requireListRole); the permissions of the
@@ -44,9 +45,9 @@ export class TodoListAPI extends APIModule {
   constructor() {
     super("todo-list.api", "API Module for todo lists", "/todo-lists");
 
-    this.todoListService = new TodoListService();
-    this.memberService = new TodoListMemberService();
-    this.invitationService = new TodoListInvitationService();
+    this.todoListService = resolveModule(TodoListService);
+    this.memberService = resolveModule(TodoListMemberService);
+    this.invitationService = resolveModule(TodoListInvitationService);
 
     if (!TodoListAPI.instance) {
       TodoListAPI.instance = this;

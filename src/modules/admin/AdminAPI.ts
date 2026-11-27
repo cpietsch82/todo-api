@@ -25,6 +25,7 @@ import {
 } from "./schema/admin.schema";
 import { ContainerService } from "./ContainerService";
 import type { Deployment, DeploymentAction } from "./schema/deployment.schema";
+import { resolveModule } from "@modules/core/resolveModule";
 
 // the permission that every operation requires, pull/deploy/restart only affect the api container
 const OPERATION_PERMISSIONS: Record<DeploymentAction, DockerPermission> = {
@@ -64,10 +65,10 @@ export class AdminAPI extends APIModule {
   constructor() {
     super("admin.api", "API Module for administrative tasks", "/admin");
 
-    this.adminService = new AdminService();
-    this.deploymentService = new DeploymentService();
-    this.containerService = new ContainerService();
-    this.versionService = new VersionService();
+    this.adminService = resolveModule(AdminService);
+    this.deploymentService = resolveModule(DeploymentService);
+    this.containerService = resolveModule(ContainerService);
+    this.versionService = resolveModule(VersionService);
 
     if (!AdminAPI.instance) {
       AdminAPI.instance = this;
