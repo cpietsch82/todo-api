@@ -105,6 +105,11 @@ describe("Discussion of todos in a list", () => {
       const response = await remove(owner, comment.commentId);
 
       expect(response.status).toBe(200);
+      expect(response.body).toEqual({
+        commentId: comment.commentId,
+        mode: "hard",
+        removedCommentIds: [comment.commentId],
+      });
       expect(await commentById(comment.commentId)).toBeUndefined();
     });
 
@@ -123,6 +128,7 @@ describe("Discussion of todos in a list", () => {
       const response = await remove(viewer, comment.commentId);
 
       expect(response.status).toBe(200);
+      expect(response.body.mode).toBe("hard");
     });
 
     it("should still let the creator of a todo without list moderate it", async () => {

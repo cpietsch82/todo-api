@@ -7,7 +7,7 @@ import { users } from "@/modules/users/schema/user.schema";
 import { type CommentCursor, encodeCommentCursor } from "./commentCursor";
 import { hasPermission } from "@/modules/authorization/permissions";
 import type { AccessingUser } from "./TodoService";
-import { TodoListService } from "@/modules/todo-lists/TodoListService";
+import { TodoListService, type DbTransaction } from "@/modules/todo-lists/TodoListService";
 import { resolveModule } from "@modules/core/resolveModule";
 import { withRetryOnDeadlock } from "@/utils/dbErrors";
 
@@ -17,6 +17,27 @@ export class InvalidParentCommentError extends Error {
     super("Invalid parent comment");
     this.name = "InvalidParentCommentError";
   }
+}
+
+/** the comment to remove does not exist (anymore), or is already a placeholder where only a whole thread may go */
+export class CommentNotFoundError extends Error {
+  constructor() {
+    super("Comment not found");
+    this.name = "CommentNotFoundError";
+  }
+}
+
+/** what a deletion did: soft = placeholder, hard = row gone, branch = row gone with all its replies */
+export interface CommentRemoval {
+  commentId: string;
+  mode: "soft" | "hard" | "branch";
+  /**
+   * the removed rows: the comment itself (not for soft) and the emptied placeholders above it, not the replies in a
+   * branch
+   */
+  removedCommentIds: string[];
+  /** branch only: the comment and its replies on all levels */
+  removedCount?: number;
 }
 
 /** a comment in the discussion of a todo; deleted ones stay as placeholders, without text and author */
@@ -163,20 +184,27 @@ export class TodoCommentService extends BaseModule {
   }
 
   /**
-   * Who may remove a comment from a discussion: its author, an admin, and whoever moderates the discussion: the owner
-   * of the list for a todo in a list, the creator for a todo without list. Changing the text stays with the author,
-   * nobody should be able to put words into someone else's mouth.
+   * Who moderates the discussion of a todo: an admin, the owner of the list for a todo in a list, the creator for a
+   * todo without list. Only they may remove a whole thread, with the replies of others.
+   */
+  async canModerateComment(todo: Pick<Todo, "userId" | "listId">, user: AccessingUser): Promise<boolean> {
+    if (hasPermission(user.permissions, "admin:all")) return true;
+    if (!todo.listId) return todo.userId === user.id;
+
+    const list = await this.todoListService.getListById(todo.listId);
+    return list !== undefined && (await this.todoListService.getListRole(list, user)) === "owner";
+  }
+
+  /**
+   * Who may remove a comment from a discussion (placeholder rule): its author and whoever moderates the discussion.
+   * Changing the text stays with the author, nobody should be able to put words into someone else's mouth.
    */
   async canDeleteComment(
     comment: Pick<TodoComment, "userId">,
     todo: Pick<Todo, "userId" | "listId">,
     user: AccessingUser,
   ): Promise<boolean> {
-    if (hasPermission(user.permissions, "admin:all") || comment.userId === user.id) return true;
-    if (!todo.listId) return todo.userId === user.id;
-
-    const list = await this.todoListService.getListById(todo.listId);
-    return list !== undefined && (await this.todoListService.getListRole(list, user)) === "owner";
+    return comment.userId === user.id || this.canModerateComment(todo, user);
   }
 
   /** direct replies of a comment, also below a placeholder; total counts the direct replies */
@@ -189,7 +217,7 @@ export class TodoCommentService extends BaseModule {
     return { items, nextCursor, total };
   }
 
-  async createTodoComment(data: NewTodoComment): Promise<DiscussionComment> {
+  async createTodoComment(data: NewTodoComment): Promise<DiscussionComment | undefined> {
     let commentId: string;
 
     if (data.parentCommentId) {
@@ -214,21 +242,123 @@ export class TodoCommentService extends BaseModule {
       commentId = created.commentId;
     }
 
-    return (await this.getDiscussionComment(commentId))!;
+    // undefined only when the comment was deleted right after it was written
+    return this.getDiscussionComment(commentId);
   }
 
-  async updateTodoComment(commentId: string, updateData: UpdateTodoComment): Promise<DiscussionComment> {
-    await db
+  /** undefined when the comment is gone or a placeholder (deleted meanwhile): its text must not come back */
+  async updateTodoComment(commentId: string, updateData: UpdateTodoComment): Promise<DiscussionComment | undefined> {
+    const updated = await db
       .update(todoComments)
       .set({ ...updateData, updatedAt: new Date() })
-      .where(eq(todoComments.commentId, commentId));
+      .where(and(eq(todoComments.commentId, commentId), isNull(todoComments.deletedAt)))
+      .returning({ commentId: todoComments.commentId });
+    if (updated.length === 0) return undefined;
 
-    return (await this.getDiscussionComment(commentId))!;
+    return this.getDiscussionComment(commentId);
   }
 
-  async deleteTodoComment(commentId: string): Promise<TodoComment> {
-    const [todoComment] = await db.delete(todoComments).where(eq(todoComments.commentId, commentId)).returning();
-    return todoComment;
+  /**
+   * Deletes a comment by the placeholder rule: with replies it stays as a placeholder without text, otherwise it is
+   * deleted for good, and so are the placeholders above it that have no replies left.
+   * @param tx the running transaction (e.g. the deletion of an account), otherwise an own one is used
+   * @throws CommentNotFoundError when the comment does not exist or already is a placeholder
+   */
+  async removeComment(commentId: string, tx?: DbTransaction): Promise<CommentRemoval> {
+    // an own transaction is retried after a deadlock; a given one belongs to the caller, who decides on retrying
+    if (!tx) {
+      return withRetryOnDeadlock(() => db.transaction((ownTx) => this.removeComment(commentId, ownTx)));
+    }
+
+    // lock order: the comment first, then its parents upwards (cleanUpEmptyPlaceholders); a reply written meanwhile
+    // holds the comment FOR SHARE, so the count below sees it
+    const comment = await this.lockComment(tx, commentId);
+    if (!comment || comment.deletedAt !== null) throw new CommentNotFoundError();
+
+    if ((await this.countReplies(tx, commentId)) > 0) {
+      await tx
+        .update(todoComments)
+        .set({ deletedAt: sql`now()`, comment: null })
+        .where(eq(todoComments.commentId, commentId));
+      return { commentId, mode: "soft", removedCommentIds: [] };
+    }
+
+    await tx.delete(todoComments).where(eq(todoComments.commentId, commentId));
+    const cleanedUp = await this.cleanUpEmptyPlaceholders(tx, comment.parentCommentId);
+    return { commentId, mode: "hard", removedCommentIds: [commentId, ...cleanedUp] };
+  }
+
+  /**
+   * Deletes a comment (also a placeholder) for good together with its replies on all levels (foreign key cascade),
+   * then the placeholders above it that have no replies left. Only for moderators.
+   * @throws CommentNotFoundError when the comment does not exist (anymore)
+   */
+  async removeBranch(commentId: string): Promise<CommentRemoval> {
+    return withRetryOnDeadlock(() =>
+      db.transaction(async (tx) => {
+        const comment = await this.lockComment(tx, commentId);
+        if (!comment) throw new CommentNotFoundError();
+
+        // a scalar subquery around the recursive count: the builder maps the result the same way for every driver
+        const [{ removed }] = await tx
+          .select({
+            removed: sql<number>`(
+              WITH RECURSIVE branch AS (
+                SELECT comment_id FROM todo_comments WHERE comment_id = ${commentId}
+                UNION ALL
+                SELECT c.comment_id FROM todo_comments c JOIN branch b ON c.parent_comment_id = b.comment_id
+              ) SELECT count(*)::int AS removed FROM branch
+            )`,
+          })
+          .from(todoComments)
+          .where(eq(todoComments.commentId, commentId));
+
+        await tx.delete(todoComments).where(eq(todoComments.commentId, commentId));
+        const cleanedUp = await this.cleanUpEmptyPlaceholders(tx, comment.parentCommentId);
+        return { commentId, mode: "branch", removedCommentIds: [commentId, ...cleanedUp], removedCount: removed };
+      }),
+    );
+  }
+
+  private async lockComment(
+    tx: DbTransaction,
+    commentId: string,
+  ): Promise<Pick<TodoComment, "parentCommentId" | "deletedAt"> | undefined> {
+    const [comment] = await tx
+      .select({ parentCommentId: todoComments.parentCommentId, deletedAt: todoComments.deletedAt })
+      .from(todoComments)
+      .where(eq(todoComments.commentId, commentId))
+      .for("update");
+    return comment;
+  }
+
+  private async countReplies(tx: DbTransaction, commentId: string): Promise<number> {
+    const [{ replies }] = await tx
+      .select({ replies: sql<number>`count(*)::int` })
+      .from(todoComments)
+      .where(eq(todoComments.parentCommentId, commentId));
+    return replies;
+  }
+
+  /**
+   * Deletes the parent when it is a placeholder without replies, and so on upwards, each one locked before it is
+   * looked at. A placeholder nobody answers anymore has nothing left to show.
+   * @returns the ids of the deleted placeholders, nearest first
+   */
+  private async cleanUpEmptyPlaceholders(tx: DbTransaction, parentCommentId: string | null): Promise<string[]> {
+    const removed: string[] = [];
+    let currentId = parentCommentId;
+
+    while (currentId) {
+      const parent = await this.lockComment(tx, currentId);
+      if (!parent || parent.deletedAt === null || (await this.countReplies(tx, currentId)) > 0) break;
+
+      await tx.delete(todoComments).where(eq(todoComments.commentId, currentId));
+      removed.push(currentId);
+      currentId = parent.parentCommentId;
+    }
+
+    return removed;
   }
 }
 

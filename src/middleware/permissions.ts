@@ -4,7 +4,7 @@ import AuthorizationService from "@/modules/authorization/AuthorizationService";
 import { TodoCommentService } from "@/modules/todos/TodoCommentService";
 import { TodoService, type AccessingUser } from "@/modules/todos/TodoService";
 import type { Todo } from "@/modules/todos/schema/todo.schema";
-import type { TodoComment } from "@/modules/todos/schema/todo.comment.schema";
+import type { DeleteCommentQuery, TodoComment } from "@/modules/todos/schema/todo.comment.schema";
 import UserService from "@/modules/users/UserService";
 import { TodoListService } from "@/modules/todo-lists/TodoListService";
 import { hasListRole } from "@/modules/todo-lists/listRoles";
@@ -275,20 +275,36 @@ function createTodoCommentCheck(
 }
 
 /**
- * Requires the right to remove the comment of the route from its discussion (TodoCommentService.canDeleteComment):
- * the author, the moderator of the discussion (owner of the list, creator of a todo without list) or an admin.
+ * Requires the right to remove the comment of the route from its discussion. Reads the validated query, so it runs
+ * after validateQuery(deleteCommentQuerySchema):
+ * - scope=branch (the comment with all replies, also a placeholder): only moderators
+ *   (TodoCommentService.canModerateComment)
+ * - otherwise (placeholder rule): the author or a moderator (TodoCommentService.canDeleteComment); a placeholder is
+ *   already deleted (404)
  */
 export function requireTodoCommentDeleteAccess(
   todoCommentService: TodoCommentService = resolveModule(TodoCommentService),
   todoService: TodoService = resolveModule(TodoService),
 ): RequestHandler {
-  return createTodoCommentCheck(
-    (comment, todo, user) => todoCommentService.canDeleteComment(comment, todo, user),
-    "Not allowed to delete this comment",
+  const branchCheck = createTodoCommentCheck(
+    (_comment, todo, user) => todoCommentService.canModerateComment(todo, user),
+    "Only moderators may delete a whole thread",
     todoCommentService,
     todoService,
     { allowDeleted: true },
   );
+  const commentCheck = createTodoCommentCheck(
+    (comment, todo, user) => todoCommentService.canDeleteComment(comment, todo, user),
+    "Not allowed to delete this comment",
+    todoCommentService,
+    todoService,
+    { allowDeleted: false },
+  );
+
+  return (req: Request, res: Response, next: NextFunction) => {
+    const { scope } = (res.locals.query ?? {}) as DeleteCommentQuery;
+    return scope === "branch" ? branchCheck(req, res, next) : commentCheck(req, res, next);
+  };
 }
 
 /**

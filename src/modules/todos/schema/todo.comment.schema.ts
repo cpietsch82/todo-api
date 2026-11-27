@@ -102,6 +102,13 @@ export const commentPageQuerySchema = z.object({
 });
 
 export type CommentPageQuery = z.infer<typeof commentPageQuerySchema>;
+
+/** scope=branch: the comment with all its replies (moderators only); without scope the placeholder rule applies */
+export const deleteCommentQuerySchema = z.object({
+  scope: z.literal("branch").optional(),
+});
+
+export type DeleteCommentQuery = z.infer<typeof deleteCommentQuerySchema>;
 export type InsertTodoComment = z.infer<typeof InsertTodoCommentSchema>;
 export type SelectTodoComment = z.infer<typeof SelectTodoCommentSchema>;
 

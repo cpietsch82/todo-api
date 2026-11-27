@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
 import request from "supertest";
 import type { Server } from "node:http";
 import { eq } from "drizzle-orm";
@@ -8,6 +8,7 @@ import { todoListMembers, todoLists, type TodoList } from "@modules/todo-lists/s
 import { TodoAPI } from "@modules/todos/TodoAPI";
 import { TodoCommentAPI } from "@modules/todos/TodoCommentAPI";
 import { todoComments } from "@modules/todos/schema/todo.comment.schema";
+import { TodoCommentService } from "@modules/todos/TodoCommentService";
 import {
   createAuthHeader,
   generateTodo,
@@ -16,6 +17,7 @@ import {
   NON_EXISTENT_UUID,
 } from "@tests/test.helpers";
 import { getTestServer } from "@tests/integration.setup";
+import { logger } from "@/utils/logger";
 
 const range = (from: number, to: number) => Array.from({ length: to - from }, (_, i) => from + i);
 
@@ -43,6 +45,10 @@ describe("Pages of the discussion of a todo", () => {
       { listId: list.listId, userId: viewer.userId, role: "viewer" },
     ]);
     todo = await generateTodo(editor.userId, { listId: list.listId });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   const get = async (user: User, todoId: string, query = "") =>
@@ -133,6 +139,9 @@ describe("Pages of the discussion of a todo", () => {
 
   const countComments = async (todoId: string) =>
     (await db.select().from(todoComments).where(eq(todoComments.todoId, todoId))).length;
+
+  const commentById = async (commentId: string) =>
+    (await db.select().from(todoComments).where(eq(todoComments.commentId, commentId)))[0];
 
   const placeholder = async (todoId: string, extra: object = {}) =>
     (
@@ -245,6 +254,163 @@ describe("Pages of the discussion of a todo", () => {
       expect((await patch(editor, parent.commentId, "x")).status).toBe(404);
       const admin = await generateUser();
       expect((await patch(admin, parent.commentId, "x", "admin")).status).toBe(404);
+    });
+
+    it("should not write text back into a placeholder when the service is asked to update it", async () => {
+      const parent = await placeholder(todo.todoId);
+
+      const result = await new TodoCommentService().updateTodoComment(parent.commentId, { comment: "zurück" });
+
+      expect(result).toBeUndefined();
+      expect(await commentById(parent.commentId)).toMatchObject({ comment: null, deletedAt: expect.any(Date) });
+    });
+  });
+
+  describe("DELETE /api/todo-comments/:commentId", () => {
+    const remove = async (user: User, commentId: string, query = "", admin = false) =>
+      request(server)
+        .delete(`/api/todo-comments/${commentId}${query}`)
+        .set(await createAuthHeader(user, admin ? { permissions: ["admin:all", "todo-comments:delete"] } : undefined));
+
+    it("should leave a placeholder when the author deletes a comment with replies", async () => {
+      const parent = await generateTodoComment(todo.todoId, owner.userId);
+      const reply = await generateTodoComment(todo.todoId, viewer.userId, { parentCommentId: parent.commentId });
+
+      const response = await remove(owner, parent.commentId);
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({ commentId: parent.commentId, mode: "soft", removedCommentIds: [] });
+      expect(await commentById(parent.commentId)).toMatchObject({ comment: null, deletedAt: expect.any(Date) });
+      expect(await commentById(reply.commentId)).toBeDefined();
+    });
+
+    it("should delete a comment without replies completely", async () => {
+      const comment = await generateTodoComment(todo.todoId, viewer.userId);
+
+      const response = await remove(viewer, comment.commentId);
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({
+        commentId: comment.commentId,
+        mode: "hard",
+        removedCommentIds: [comment.commentId],
+      });
+      expect(await commentById(comment.commentId)).toBeUndefined();
+    });
+
+    it("should remove an empty placeholder together with its last reply", async () => {
+      const parent = await placeholder(todo.todoId);
+      const reply = await generateTodoComment(todo.todoId, viewer.userId, { parentCommentId: parent.commentId });
+
+      const response = await remove(viewer, reply.commentId);
+
+      expect(response.status).toBe(200);
+      expect(response.body.mode).toBe("hard");
+      expect(response.body.removedCommentIds).toEqual([reply.commentId, parent.commentId]);
+      expect(await countComments(todo.todoId)).toBe(0);
+    });
+
+    it("should remove placeholders over several levels, but keep one that still has replies", async () => {
+      const root = await placeholder(todo.todoId);
+      const sibling = await generateTodoComment(todo.todoId, owner.userId, { parentCommentId: root.commentId });
+      const middle = await placeholder(todo.todoId, { parentCommentId: root.commentId });
+      const reply = await generateTodoComment(todo.todoId, viewer.userId, { parentCommentId: middle.commentId });
+
+      const response = await remove(viewer, reply.commentId);
+
+      expect(response.body.removedCommentIds).toEqual([reply.commentId, middle.commentId]);
+      expect(await commentById(root.commentId)).toBeDefined();
+      expect(await commentById(sibling.commentId)).toBeDefined();
+    });
+
+    it("should answer 404 for a plain delete of a placeholder", async () => {
+      const parent = await placeholder(todo.todoId);
+      await generateTodoComment(todo.todoId, viewer.userId, { parentCommentId: parent.commentId });
+
+      const response = await remove(owner, parent.commentId);
+
+      expect(response.status).toBe(404);
+      expect(await commentById(parent.commentId)).toBeDefined();
+    });
+
+    it("should let the list owner and an admin remove a whole thread of others", async () => {
+      const admin = await generateUser();
+      for (const [moderator, asAdmin] of [
+        [owner, false],
+        [admin, true],
+      ] as const) {
+        const parent = await generateTodoComment(todo.todoId, viewer.userId);
+        const reply = await generateTodoComment(todo.todoId, editor.userId, { parentCommentId: parent.commentId });
+        await generateTodoComment(todo.todoId, viewer.userId, { parentCommentId: reply.commentId });
+
+        const response = await remove(moderator, parent.commentId, "?scope=branch", asAdmin);
+
+        expect(response.status).toBe(200);
+        expect(response.body).toMatchObject({ commentId: parent.commentId, mode: "branch", removedCount: 3 });
+        expect(await countComments(todo.todoId)).toBe(0);
+      }
+    });
+
+    it("should let a moderator remove a placeholder as a thread", async () => {
+      const parent = await placeholder(todo.todoId);
+      await generateTodoComment(todo.todoId, viewer.userId, { parentCommentId: parent.commentId });
+
+      const response = await remove(owner, parent.commentId, "?scope=branch");
+
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({ commentId: parent.commentId, mode: "branch", removedCount: 2 });
+      expect(await countComments(todo.todoId)).toBe(0);
+    });
+
+    it("should remove the emptied placeholder above a removed thread", async () => {
+      const root = await placeholder(todo.todoId);
+      const parent = await generateTodoComment(todo.todoId, viewer.userId, { parentCommentId: root.commentId });
+      await generateTodoComment(todo.todoId, editor.userId, { parentCommentId: parent.commentId });
+
+      const response = await remove(owner, parent.commentId, "?scope=branch");
+
+      expect(response.body).toMatchObject({
+        mode: "branch",
+        removedCount: 2,
+        removedCommentIds: [parent.commentId, root.commentId],
+      });
+      expect(await countComments(todo.todoId)).toBe(0);
+    });
+
+    it("should refuse a whole thread to the author without moderation right", async () => {
+      const parent = await generateTodoComment(todo.todoId, viewer.userId);
+      await generateTodoComment(todo.todoId, editor.userId, { parentCommentId: parent.commentId });
+      const warn = vi.spyOn(logger, "warn");
+
+      const response = await remove(viewer, parent.commentId, "?scope=branch");
+
+      expect(response.status).toBe(403);
+      // the reason is only logged, the client gets the general text
+      expect(response.text).toBe("Insufficient Permissions!");
+      expect(warn).toHaveBeenCalledWith(
+        expect.objectContaining({ reason: "Only moderators may delete a whole thread" }),
+        "Access denied",
+      );
+      expect(await countComments(todo.todoId)).toBe(2);
+    });
+
+    it("should still let a moderator choose the placeholder variant on a comment of others", async () => {
+      const parent = await generateTodoComment(todo.todoId, viewer.userId);
+      await generateTodoComment(todo.todoId, editor.userId, { parentCommentId: parent.commentId });
+
+      const response = await remove(owner, parent.commentId);
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({ commentId: parent.commentId, mode: "soft", removedCommentIds: [] });
+    });
+
+    it("should answer 400 for an unknown scope", async () => {
+      const comment = await generateTodoComment(todo.todoId, viewer.userId);
+
+      const response = await remove(owner, comment.commentId, "?scope=all");
+
+      expect(response.status).toBe(400);
+      expect(await commentById(comment.commentId)).toBeDefined();
     });
   });
 });

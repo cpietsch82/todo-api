@@ -354,7 +354,7 @@ describe("TodoCommentAPI", () => {
   // DELETE /api/todo-comments/:commentId
   // ---------------------------------------------------------------------------
   describe("DELETE /api/todo-comments/:commentId", () => {
-    it("should delete an existing comment and return the deleted record", async () => {
+    it("should delete an existing comment and return how it was removed", async () => {
       const authHeader = await createAuthHeader(testUser);
       const existing = await generateTodoComment(testTodo.todoId, testUser.userId, { comment: "Comment to delete" });
 
@@ -363,7 +363,11 @@ describe("TodoCommentAPI", () => {
         .set(authHeader);
 
       expect(deleteResponse.status).toBe(200);
-      expect(deleteResponse.body.commentId).toBe(existing.commentId);
+      expect(deleteResponse.body).toEqual({
+        commentId: existing.commentId,
+        mode: "hard",
+        removedCommentIds: [existing.commentId],
+      });
 
       // verify it is actually gone
       const getResponse = await request(server)
