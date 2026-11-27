@@ -1,4 +1,4 @@
-import { type AnyPgColumn, check, index, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import { type AnyPgColumn, check, index, pgTable, primaryKey, text, timestamp, uuid } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
 import { todos } from "./todo.schema";
 import { users } from "@/db/schema";
@@ -35,6 +35,22 @@ export const todoComments = pgTable(
   ],
 );
 
+export const todoCommentMentions = pgTable(
+  "todo_comment_mentions",
+  {
+    commentId: uuid("comment_id")
+      .notNull()
+      .references(() => todoComments.commentId, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.userId, { onDelete: "cascade" }),
+  },
+  (table) => [
+    primaryKey({ columns: [table.commentId, table.userId] }),
+    index("idx_todo_comment_mentions_user_id").on(table.userId),
+  ],
+);
+
 export const todoCommentsRelations = relations(todoComments, ({ one }) => ({
   todo: one(todos, {
     fields: [todoComments.todoId],
@@ -48,6 +64,7 @@ export const todoCommentsRelations = relations(todoComments, ({ one }) => ({
 
 // Types for TypeScript
 export type TodoComment = typeof todoComments.$inferSelect;
+export type TodoCommentMention = typeof todoCommentMentions.$inferSelect;
 export type NewTodoComment = Omit<typeof todoComments.$inferInsert, "commentId" | "createdAt" | "updatedAt">;
 export type UpdateTodoComment = Partial<
   Omit<typeof todoComments.$inferInsert, "commentId" | "userId" | "parentCommentId" | "deletedAt" | "createdAt" | "updatedAt">
