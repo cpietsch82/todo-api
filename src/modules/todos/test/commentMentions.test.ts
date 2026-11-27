@@ -17,6 +17,14 @@ describe("extractMentionIds", () => {
   ])("should treat %j as plain text", (text) => {
     expect(extractMentionIds(text)).toEqual([]);
   });
+  it("should find adjacent tokens", () => {
+    expect(extractMentionIds(`<@${A}><@${B}>`)).toEqual([A, B]);
+  });
+  it("should give the same result for the same input every time", () => {
+    const text = `Hallo <@${A}> und <@${B}>`;
+    expect(extractMentionIds(text)).toEqual([A, B]);
+    expect(extractMentionIds(text)).toEqual([A, B]);
+  });
   it("should return nothing for a deleted comment", () => {
     expect(extractMentionIds(null)).toEqual([]);
   });

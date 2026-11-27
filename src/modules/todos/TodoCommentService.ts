@@ -9,7 +9,7 @@ import { hasPermission } from "@/modules/authorization/permissions";
 import type { AccessingUser } from "./TodoService";
 import { TodoListService, type DbTransaction } from "@/modules/todo-lists/TodoListService";
 import { resolveModule } from "@modules/core/resolveModule";
-import { withRetryOnDeadlock } from "@/utils/dbErrors";
+import { getPgConstraintName, isForeignKeyViolation, withRetryOnDeadlock } from "@/utils/dbErrors";
 import { todoListMembers, todoLists } from "@/modules/todo-lists/schema/todo-list.schema";
 import { extractMentionIds } from "./commentMentions";
 
@@ -27,6 +27,17 @@ export class InvalidMentionError extends Error {
     super("Invalid mention");
     this.name = "InvalidMentionError";
   }
+}
+
+const MENTION_USER_FK = "todo_comment_mentions_user_id_users_user_id_fk";
+
+/**
+ * A mentioned account that is deleted between the check and the insert violates the foreign key of the mention row.
+ * That is an invalid mention, not a server error; every other error is rethrown unchanged.
+ */
+export function mapMentionForeignKeyError(error: unknown): never {
+  if (isForeignKeyViolation(error) && getPgConstraintName(error) === MENTION_USER_FK) throw new InvalidMentionError();
+  throw error;
 }
 
 /** the comment to remove does not exist (anymore), or is already a placeholder where only a whole thread may go */
@@ -282,10 +293,10 @@ export class TodoCommentService extends BaseModule {
         await this.assertMentionable(tx, data.todoId, mentionIds);
 
         const [created] = await tx.insert(todoComments).values(data).returning({ commentId: todoComments.commentId });
-        await this.replaceMentions(tx, created.commentId, mentionIds);
+        await this.replaceMentions(tx, created.commentId, [], mentionIds);
         return created.commentId;
       }),
-    );
+    ).catch(mapMentionForeignKeyError);
 
     // read after the commit (the reading uses db)
     // undefined only when the comment was deleted right after it was written
@@ -325,11 +336,13 @@ export class TodoCommentService extends BaseModule {
           .select({ userId: todoCommentMentions.userId })
           .from(todoCommentMentions)
           .where(eq(todoCommentMentions.commentId, commentId));
-        const keptIds = new Set([...stored.map((row) => row.userId), ...addedIds]);
-        await this.replaceMentions(tx, commentId, textIds.filter((id) => keptIds.has(id)));
+        // stored rows still in the text stay, mentions of deleted accounts (no row anymore) do not come back
+        const storedIds = stored.map((row) => row.userId);
+        const wantedIds = textIds.filter((id) => storedIds.includes(id) || addedIds.includes(id));
+        await this.replaceMentions(tx, commentId, storedIds, wantedIds);
         return true;
       }),
-    );
+    ).catch(mapMentionForeignKeyError);
     if (!found) return undefined;
 
     // read after the commit (the reading uses db)
@@ -360,11 +373,34 @@ export class TodoCommentService extends BaseModule {
     if (userIds.some((id) => !mentionable.has(id))) throw new InvalidMentionError();
   }
 
-  /** the mention rows of a comment become exactly the given users */
-  private async replaceMentions(tx: DbTransaction, commentId: string, userIds: string[]): Promise<void> {
-    await tx.delete(todoCommentMentions).where(eq(todoCommentMentions.commentId, commentId));
-    if (userIds.length === 0) return;
-    await tx.insert(todoCommentMentions).values(userIds.map((userId) => ({ commentId, userId })));
+  /**
+   * The mention rows of a comment become the wanted users: rows that are no longer wanted are deleted, new ones are
+   * inserted, rows that stay are never touched.
+   * Lock order: the users rows are KEY SHARE-locked by the insert, after the comment; a cycle with the deletion of an
+   * account is resolved by the deadlock retry.
+   */
+  private async replaceMentions(
+    tx: DbTransaction,
+    commentId: string,
+    currentIds: string[],
+    wantedIds: string[],
+  ): Promise<void> {
+    const current = new Set(currentIds);
+    const wanted = new Set(wantedIds);
+    const removedIds = currentIds.filter((id) => !wanted.has(id));
+    const addedIds = wantedIds.filter((id) => !current.has(id));
+
+    if (removedIds.length > 0) {
+      await tx
+        .delete(todoCommentMentions)
+        .where(and(eq(todoCommentMentions.commentId, commentId), inArray(todoCommentMentions.userId, removedIds)));
+    }
+    if (addedIds.length > 0) {
+      await tx
+        .insert(todoCommentMentions)
+        .values(addedIds.map((userId) => ({ commentId, userId })))
+        .onConflictDoNothing();
+    }
   }
 
   /**

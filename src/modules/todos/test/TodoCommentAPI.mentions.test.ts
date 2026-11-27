@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, beforeEach } from "vitest";
 import request from "supertest";
 import type { Server } from "node:http";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import type { Todo, User } from "@/db/schema";
 import { users } from "@/modules/users/schema/user.schema";
@@ -313,6 +313,37 @@ describe("mentions in comment responses", () => {
       expect(
         (await mentionRows(created.body.commentId)).map((row) => row.userId),
       ).toEqual([owner.userId]);
+    });
+
+    it("should only delete removed and insert added mention rows on an edit", async () => {
+      const created = await post(viewer, {
+        todoId: todo.todoId,
+        comment: `Hallo <@${editor.userId}> und <@${owner.userId}>`,
+      });
+      const commentId = created.body.commentId;
+      // xmin is the id of the transaction that wrote the row: a row that is deleted and inserted again gets a new one
+      const versions = async () => {
+        const result = await db.execute(
+          sql`SELECT user_id::text AS user_id, xmin::text AS xmin FROM todo_comment_mentions WHERE comment_id = ${commentId}`,
+        );
+        const raw = result as unknown;
+        const rows = (Array.isArray(raw) ? raw : (raw as { rows: unknown[] }).rows) as { user_id: string; xmin: string }[];
+        return new Map(rows.map((row) => [row.user_id, row.xmin]));
+      };
+      const before = await versions();
+      expect([...before.keys()].sort()).toEqual([editor.userId, owner.userId].sort());
+
+      const response = await patch(
+        viewer,
+        commentId,
+        `Neu <@${owner.userId}> und <@${viewer.userId}>`,
+      );
+
+      expect(response.status).toBe(200);
+      const after = await versions();
+      expect([...after.keys()].sort()).toEqual([owner.userId, viewer.userId].sort());
+      // the kept row was not touched
+      expect(after.get(owner.userId)).toBe(before.get(owner.userId));
     });
 
     it("should refuse a new mention of a stranger on an edit", async () => {
