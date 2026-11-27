@@ -11,7 +11,8 @@ import {
   UpdateTodoBody,
   updateTodoSchema,
 } from "./schema/todo.schema";
-import { validateBody, validateParams } from "@/middleware/validate";
+import { type CommentPageQuery, commentPageQuerySchema } from "./schema/todo.comment.schema";
+import { validateBody, validateParams, validateQuery } from "@/middleware/validate";
 import {
   requirePermissions,
   requireTodoAccess,
@@ -26,6 +27,12 @@ import { hasListRole } from "@/modules/todo-lists/listRoles";
 import { MAX_TODOS_PER_LIST } from "@/modules/todo-lists/limits";
 import type { AccessingUser } from "./TodoService";
 import { resolveModule } from "@modules/core/resolveModule";
+import { CommentEventsService, type CommentStream } from "./CommentEventsService";
+
+/** writes to a destroyed response neither throw nor end it, so the distributor must be told to drop the stream */
+function assertOpen(res: Response) {
+  if (res.destroyed) throw new Error("the client connection is closed");
+}
 
 export class TodoAPI extends APIModule {
   private static instance: TodoAPI;
@@ -60,9 +67,18 @@ export class TodoAPI extends APIModule {
     this.router.get(
       "/:todoId/comments",
       validateParams(todoByIdSchema),
+      validateQuery(commentPageQuerySchema),
       requirePermissions("todo-comments:read"),
       requireAccess,
       typedHandler(this.getCommentsOfTodo.bind(this)),
+    );
+    // live changes of that discussion as server-sent events
+    this.router.get(
+      "/:todoId/comments/events",
+      validateParams(todoByIdSchema),
+      requirePermissions("todo-comments:read"),
+      requireAccess,
+      this.streamCommentEvents.bind(this),
     );
     this.router.post("/", requirePermissions("todos:create"), validateBody(createTodoSchema), typedHandler(this.createTodo.bind(this)));
     this.router.patch(
@@ -100,7 +116,39 @@ export class TodoAPI extends APIModule {
   }
 
   private async getCommentsOfTodo(req: TypedRequestParams<TodoByIdParams>, res: Response) {
-    res.json(await this.todoCommentService.getCommentsForTodo(req.params.todoId));
+    res.json(await this.todoCommentService.getDiscussionPage(req.params.todoId, res.locals.query as CommentPageQuery));
+  }
+
+  private streamCommentEvents(req: Request, res: Response) {
+    // the client may have left while the access check was running: 'close' is already emitted and would not come again
+    if (res.destroyed || req.socket.destroyed) return;
+    res.status(200);
+    res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders();
+    res.write(": connected\n\n");
+
+    const stream: CommentStream = {
+      user: req.user!,
+      expiresAt: req.user!.exp! * 1000,
+      send: (event, data) => {
+        assertOpen(res);
+        if (!res.writableEnded) res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+      },
+      ping: () => {
+        assertOpen(res);
+        if (!res.writableEnded) res.write(": ping\n\n");
+      },
+      close: (reason) => {
+        if (res.writableEnded) return;
+        if (reason === "evicted" && !res.destroyed) res.write(": evicted\n\n");
+        res.end();
+      },
+    };
+    const unsubscribe = resolveModule(CommentEventsService).subscribe(req.params.todoId as string, stream);
+    // the response closes with the connection, the request already closes once its body is read
+    res.on("close", unsubscribe);
   }
 
   /**

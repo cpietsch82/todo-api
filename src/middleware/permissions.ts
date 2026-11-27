@@ -4,7 +4,7 @@ import AuthorizationService from "@/modules/authorization/AuthorizationService";
 import { TodoCommentService } from "@/modules/todos/TodoCommentService";
 import { TodoService, type AccessingUser } from "@/modules/todos/TodoService";
 import type { Todo } from "@/modules/todos/schema/todo.schema";
-import type { TodoComment } from "@/modules/todos/schema/todo.comment.schema";
+import type { DeleteCommentQuery, TodoComment } from "@/modules/todos/schema/todo.comment.schema";
 import UserService from "@/modules/users/UserService";
 import { TodoListService } from "@/modules/todo-lists/TodoListService";
 import { hasListRole } from "@/modules/todo-lists/listRoles";
@@ -234,7 +234,7 @@ export function requireTodoCommentOwnership(
   return createOwnershipMiddleware(
     async (req) => {
       const todoComment = await todoCommentService.getTodoCommentById(req.params.commentId as string);
-      return todoComment?.userId;
+      return todoComment?.userId ?? undefined;
     },
     "You are not allowed to access this todo comment",
   );
@@ -244,13 +244,14 @@ type TodoCommentCheck = (comment: TodoComment, todo: Todo, user: AccessingUser) 
 
 /**
  * Loads the comment of the route and its todo and checks the access with the given rule.
- * 404 when the comment (or its todo) does not exist, 403 with the reason in the log when the rule does not allow it.
+ * 404 when the comment (or its todo) does not exist, or the comment is deleted and options.allowDeleted is false, 403 with the reason in the log when the rule does not allow it.
  */
 function createTodoCommentCheck(
   isAllowed: TodoCommentCheck,
   reason: string,
   todoCommentService: TodoCommentService,
   todoService: TodoService,
+  options: { allowDeleted: boolean },
 ): RequestHandler {
   return async (req: Request, res: Response, next: NextFunction) => {
     const user = getAuthenticatedUser(req, res);
@@ -259,6 +260,18 @@ function createTodoCommentCheck(
     const comment = await todoCommentService.getTodoCommentById(req.params.commentId as string);
     const todo = comment ? await todoService.getTodoById(comment.todoId) : undefined;
     if (!comment || !todo) {
+      res.respondNotFound();
+      return;
+    }
+
+    // a placeholder has no author anymore, so the rights of a comment cannot apply: whoever sees the todo gets the 404
+    // below, a stranger the 403 of every foreign resource
+    const placeholderOnly = comment.deletedAt !== null && !options.allowDeleted;
+    if (placeholderOnly) {
+      if (!(await todoService.canAccessTodo(todo, user))) {
+        res.respondAuthorizationInsufficient(reason, true);
+        return;
+      }
       res.respondNotFound();
       return;
     }
@@ -273,19 +286,36 @@ function createTodoCommentCheck(
 }
 
 /**
- * Requires the right to remove the comment of the route from its discussion (TodoCommentService.canDeleteComment):
- * the author, the moderator of the discussion (owner of the list, creator of a todo without list) or an admin.
+ * Requires the right to remove the comment of the route from its discussion. Reads the validated query, so it runs
+ * after validateQuery(deleteCommentQuerySchema):
+ * - scope=branch (the comment with all replies, also a placeholder): only moderators
+ *   (TodoCommentService.canModerateComment)
+ * - otherwise (placeholder rule): the author or a moderator (TodoCommentService.canDeleteComment); a placeholder is
+ *   already deleted (404)
  */
 export function requireTodoCommentDeleteAccess(
   todoCommentService: TodoCommentService = resolveModule(TodoCommentService),
   todoService: TodoService = resolveModule(TodoService),
 ): RequestHandler {
-  return createTodoCommentCheck(
+  const branchCheck = createTodoCommentCheck(
+    (_comment, todo, user) => todoCommentService.canModerateComment(todo, user),
+    "Only moderators may delete a whole thread",
+    todoCommentService,
+    todoService,
+    { allowDeleted: true },
+  );
+  const commentCheck = createTodoCommentCheck(
     (comment, todo, user) => todoCommentService.canDeleteComment(comment, todo, user),
     "Not allowed to delete this comment",
     todoCommentService,
     todoService,
+    { allowDeleted: false },
   );
+
+  return (req: Request, res: Response, next: NextFunction) => {
+    const { scope } = (res.locals.query ?? {}) as DeleteCommentQuery;
+    return scope === "branch" ? branchCheck(req, res, next) : commentCheck(req, res, next);
+  };
 }
 
 /**
@@ -303,6 +333,21 @@ export function requireTodoCommentEditAccess(
     "Only the author with access to the todo may change a comment",
     todoCommentService,
     todoService,
+    { allowDeleted: false },
+  );
+}
+
+/** Requires the right to read the comment of the route: whoever may see its todo; placeholders are allowed. */
+export function requireTodoCommentReadAccess(
+  todoCommentService: TodoCommentService = resolveModule(TodoCommentService),
+  todoService: TodoService = resolveModule(TodoService),
+): RequestHandler {
+  return createTodoCommentCheck(
+    (_comment, todo, user) => todoService.canAccessTodo(todo, user),
+    "Not allowed to read this comment",
+    todoCommentService,
+    todoService,
+    { allowDeleted: true },
   );
 }
 
